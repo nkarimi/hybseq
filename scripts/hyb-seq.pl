@@ -16,8 +16,8 @@ use Data::Dumper;
 
 my $targets;
 my $project_name;
-my $script_dir = abs_path($0);
 my $free_cpus = get_free_cpus();
+(my $script_dir = abs_path($0)) =~ s/(.*\/).*/$1/;
 
 # Required executables
 my $bwa = check_path_for_exec("bwa");
