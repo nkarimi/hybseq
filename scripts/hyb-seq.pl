@@ -225,17 +225,17 @@ sub run_mira {
 #	}
 	close($mira_conf);
 
-#	# Run mira
-#	print "Running mira for '$species_name' using reads from accession '$base_accession_name'...\n";
-#	my $return = system("$mira $conf_file > $mira_output");
-#	die "ERROR: Mira returned '$return', check output in '$mira_output' for further details.\n" if ($return);
-#	print "Finished mira.\n";
-#	
-#	my $assembly = $species_name."_assembly/$species_name"."_d_results/$species_name"."_out.unpadded.fasta";
-#	move($assembly, getcwd()."/$species_name.fasta") or die "Moving of '$assembly' failed: $!.\n";
-#	$assembly = getcwd()."/$species_name.fasta";
+	# Run mira
+	print "Running mira for '$species_name' using reads from accession '$base_accession_name'...\n";
+	my $return = system("$mira $conf_file > $mira_output");
+	die "ERROR: Mira returned '$return', check output in '$mira_output' for further details.\n" if ($return);
+	print "Finished mira.\n";
+	
+	my $assembly = $species_name."_assembly/$species_name"."_d_results/$species_name"."_out.unpadded.fasta";
+	move($assembly, getcwd()."/$species_name.fasta") or die "Moving of '$assembly' failed: $!.\n";
+	$assembly = getcwd()."/$species_name.fasta";
 
-	my $assembly = getcwd()."/$species_name".".fasta";
+	#my $assembly = getcwd()."/$species_name".".fasta";
 
 	# Remove unneeded mira output
 	remove_tree($species_name."_assembly");
