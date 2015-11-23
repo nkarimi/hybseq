@@ -29,6 +29,7 @@ my $samtools = check_path_for_exec("samtools");
 
 # Required jar files
 my $gatk = check_path_for_jar("GenomeAnalysisTK.jar");
+my $hapcompass = check_path_for_jar("hapcompass.jar");
 my $mark_dups = check_path_for_jar("MarkDuplicates.jar");
 my $create_seq_dict = check_path_for_jar("CreateSequenceDictionary.jar");
 
@@ -110,8 +111,11 @@ foreach my $species_name (keys %config) {
 	call_species_haplotypes($species, $species_name);
 }
 
-# Phase haplotypes with (HapHunt?)
-
+# Phase haplotypes with HapCompass
+foreach my $species_name (keys %config) {
+	my $species = $config{$species_name};
+	phase_species_haplotypes($species, $species_name);
+}
 
 sub initialize_directory_structure {
 	my $config = shift;
@@ -473,7 +477,11 @@ sub call_species_haplotypes {
 		chdir("$project_name/$species_name/$accession/");
 
 		# Skip if this has been completed in a previous run
-		next if (-e "$accession.vars.vcf");
+		#next if (-e "$accession.vars.vcf");
+		if (-e "$accession.vars.vcf") {
+			$accessions{$accession}->{VARIANTS} = "$accession.vars.vcf";
+			next;
+		}
 
 		# Run HaplotypeCaller on recalibrated bam file
 		my $return = system("$java -jar $gatk \\
@@ -487,6 +495,40 @@ sub call_species_haplotypes {
 				-o $accession.vars.vcf");
 		$accessions{$accession}->{VARIANTS} = "$accession.vars.vcf";
 		die "Error calling haplotypes in bam file '$bam'.\n" if ($return);
+	}
+	chdir($init_dir);
+
+	return;
+}
+
+sub phase_species_haplotypes {
+	my ($species, $species_name) = @_;
+
+	my $ploidy = $species->{PLOIDY};
+	my $reference = $species->{REFERENCE};
+
+	my $init_dir = abs_path(getcwd());
+
+	my %accessions = %{$species->{ACCESSIONS}};
+	foreach my $accession (keys %accessions) {
+		my $bam = $accessions{$accession}->{BAM_ALIGN_RECAL};
+		my $vcf = $accessions{$accession}->{VARIANTS};
+
+		chdir("$project_name/$species_name/$accession/");
+
+		# Skip if this has been completed in a previous run
+		#next if (-e "$accession.vars.vcf");
+		#next if (-e "hc_MWER_solution.txt");
+		if (-e "hc_MWER_solution.txt") {
+			$accessions{$accession}->{PHASED_HAPS} = "hc_MWER_solution";
+			next;
+		}
+
+		# Run HaplotypeCaller on recalibrated bam file
+		# java -Xmx200g -jar ~/private/phyloPrograms/hapcompass_v0.7.7/hapcompass.jar  --bam a_digitata_0.recal.bam --vcf a_digitata_0.vars.vcf -o ./ -p 4
+		my $return = system("$java -Xmx200g -jar $hapcompass --bam $bam --vcf $vcf -o ./ -p $ploidy");
+		$accessions{$accession}->{PHASED_HAPS} = "hc_MWER_solution";
+		die "Error phasing haplotypes in vcf file '$vcf'.\n" if ($return);
 	}
 	chdir($init_dir);
 
