@@ -7,6 +7,9 @@ use Getopt::Long;
 use Time::HiRes qw(usleep);
 use Fcntl qw(:flock SEEK_END);
 
+# Turn on autoflush
+$|++;
+
 my $min_misaligned_intron_length = 100;
 
 #my $free_cpus = get_free_cpus();
@@ -37,6 +40,7 @@ print "Running blat against targets and contigs...\n";
 #my $return = system("$blat $input $targets -t=dna -q=dna -noHead -fine -repMatch=1000000 $blat_out_name");
 my $return = system("$blat $input $targets -t=dna -q=dna -noHead -repMatch=1000000 $blat_out_name") if (!-e $blat_out_name);
 die "Error running blat: '$return'.\n" if ($return);
+print "Blat completed, parsing hits...\n";
 
 # Parse blat output
 my %targets;
@@ -51,89 +55,92 @@ while (my $line = <$blat_out>) {
 	    $t_num_inserts, $t_base_inserts, $strand, $q_name, $q_size, $q_start, $q_end,
 		$t_name, $t_size, $t_start, $t_end, $block_count, $block_sizes, $q_starts, $t_starts) = @line; 
 
-	# Check that contig meets target coverage threshold
-#	if (($match + $mismatch) / $q_size >= $target_perc_cov_threshold && 
-#		($match + $mismatch) / $q_size >= $contig_perc_cov_threshold) {
+	$targets{$q_name}->{$t_name} = {'NAME' => $t_name};
 
-		# If we have multiple hits for the same contig and target sequence, we opt for the longer
-		if (!exists($targets{$q_name}->{$t_name})) {
-			#$targets{$q_name}->{$t_name} = {'NAME' => $t_name, 'STRAND' => $strand, 'T_STARTS' => $t_starts, 'Q_STARTS' => $q_starts, 'SIZES' => $block_sizes};
-			$targets{$q_name}->{$t_name} = {'NAME' => $t_name, 'STRAND' => $strand, 'SIZES' => $block_sizes};
-		}
-		else {
-			my $hit = $targets{$q_name}->{$t_name};
+	#	# If we have multiple hits for the same contig and target sequence, we opt for the longer
+	#	if (!exists($targets{$q_name}->{$t_name})) {
+	#		$targets{$q_name}->{$t_name} = {'NAME' => $t_name, 'STRAND' => $strand, 'SIZES' => $block_sizes};
+	#	}
+	#	else {
+	#		my $hit = $targets{$q_name}->{$t_name};
 
-			# Calculate how long the currently stored hit is
-#			my $current_size = $hit->{SIZES};
-#			my @current_size = split(",", $current_size);
-#
-#			$current_size = 0;
-#			foreach my $size (@current_size) {
-#				$current_size += $size;
-#			}
-			my $current_size = 0;
-			$current_size += $_ foreach (split(",", $current_size));
+	#		# Calculate how long the currently stored hit is
+	#		my $current_size = 0;
+	#		$current_size += $_ foreach (split(",", $current_size));
 
-			# Calculate how long the newly identified hit is
-#			my $new_size = $block_sizes;
-#			my @new_size = split(",", $new_size);
-#
-#			$new_size = 0;
-#			foreach my $size (@new_size) {
-#				$new_size += $size;
-#			}
-			my $new_size = 0;
-			$new_size += $_ foreach (split(",", $new_size));
+	#		# Calculate how long the newly identified hit is
+	#		my $new_size = 0;
+	#		$new_size += $_ foreach (split(",", $new_size));
 
-			if ($current_size > $new_size) {
-				#$targets{$q_name}->{$t_name} = {'NAME' => $t_name, 'STRAND' => $strand, 'T_STARTS' => $t_starts, 'Q_STARTS' => $q_starts, 'SIZES' => $block_sizes};
-				$targets{$q_name}->{$t_name} = {'NAME' => $t_name, 'STRAND' => $strand, 'SIZES' => $block_sizes};
-			}
-		}
-#	}
+	#		if ($current_size > $new_size) {
+	#			#$targets{$q_name}->{$t_name} = {'NAME' => $t_name, 'STRAND' => $strand, 'T_STARTS' => $t_starts, 'Q_STARTS' => $q_starts, 'SIZES' => $block_sizes};
+	#			$targets{$q_name}->{$t_name} = {'NAME' => $t_name, 'STRAND' => $strand, 'SIZES' => $block_sizes};
+	#		}
+	#	}
 }
 close($blat_out);
+print "Hits successfully parsed.\n";
 
 # Load contig and target sequences
 my %contig_seqs = parse_fasta($input);
 my %target_seqs = parse_fasta($targets);
 
 # Create consensus sequence for each target
+my %troublesome;
 my %final_alignments;
 foreach my $target (keys %targets) {
+	#$target = '161|Gorai.012G146100.2|';
+	#$target = '596|Gorai.006G215300.1|';
+	#next if $target eq "4143|Gorai.008G286900.1|";
+
 	my @hits = values %{$targets{$target}};
 	my $target_seq = $target_seqs{$target};
+
+	print "\nAligning the following contigs to target '$target':\n";
 
 	# Stores locations and sequences of introns
 	my %introns;
 	$final_alignments{$target}->{$target} = $target_seq;
+
+#	open(my $target_fa, ">", "$target.fasta");
+#	print {$target_fa} ">$target\n";
+#	print {$target_fa} "$target_seq\n";
+#	close($target_fa);
+#
+#	foreach my $hit (@hits) {
+#		my $seqname = $hit->{'NAME'};
+#		my $seq = $contig_seqs{$seqname};
+#
+#		open(my $tmp, ">", "$seqname.fasta");
+#		print {$tmp} ">$seqname\n";
+#		print {$tmp} "$seq\n";
+#		close($tmp);
+#	}
 
 	# Use spaln to align exons of each contig with the reference and identify introns
 	foreach my $hit (@hits) {
 		my $seqname = $hit->{'NAME'};
 		my $seq = $contig_seqs{$seqname};
 
+		#print "  $seqname ($hit->{'STRAND'})\n";
+		print "  $seqname\n";
+
 		# Reverse complement the hit if required
-		$seq = rev_comp($seq) if ($hit->{'STRAND'} eq "-");
-		#	print "    Contig will be reverse complemented (- hit).\n\n";
-		#	foreach my $index (0 .. $#t_starts) {
-		#		$t_starts[$index] = $contig_length - $sizes[$index] - $t_starts[$index];
-		#		$q_starts[$index] = $target_length - $sizes[$index] - $q_starts[$index];
-		#	}
-		#	@sizes = reverse(@sizes);
-		#	@t_starts = reverse(@t_starts);
-		#	@q_starts = reverse(@q_starts);
-		#}
-		
-		#align_contig({CONTIG_NAME => $seqname, CONTIG_SEQ => $seq, TARGET_NAME => $target, TARGET_SEQ => $aligned_contigs{$target}});
-		#align_contig({CONTIG_NAME => $seqname, CONTIG_SEQ => $seq, TARGET_NAME => $target, TARGET_SEQ => $aligned_contigs{$target}});
-		#align_contig({CONTIG_NAME => $seqname, CONTIG_SEQ => $seq, TARGET_NAME => $target, TARGET_SEQ => $aligned_contigs{$target}, INTRONS => \%introns});
+		#print $seq,"\n";
+		#$seq = rev_comp($seq) if ($hit->{'STRAND'} eq "-");
+		#print $seq,"\n";
+
+		# Perform alignment with spaln
 		align_contig({CONTIG_NAME => $seqname, CONTIG_SEQ => $seq, TARGET_NAME => $target, TARGET_SEQ => $target_seq, INTRONS => \%introns});
 	}
 
+	move_misaligned_introns(\%introns, $target, $target_seq);
+
+	print "  Aligning and inserting introns (",(scalar(keys %introns)),")...\n";
+
 	# Insert intronic sequence into exon
 	foreach my $site (sort { $b <=> $a } keys %introns) {
-		print "Consensing introns at site: $site...\n";
+		print "    Consensing introns at site: $site...\t";
 
 		# Determine which contigs don't have an intron at this site
 		my %intronless_seqs = map { ($_ ne $target) ? ($_ => 1) : () } keys %{$final_alignments{$target}};
@@ -163,16 +170,14 @@ foreach my $target (keys %targets) {
 			close($tmp);
 
 			# Align with mafft, parse results, and clean up
-			system("mafft --maxiterate 1000 --localpair intron-$site.fasta > intron-$site.aln.fasta 2> /dev/null");
+			#my $return = system("mafft --maxiterate 1000 --localpair intron-$site.fasta > intron-$site.aln.fasta 2> /dev/null");
+			my $return = system("mafft --maxiterate 1000 --localpair --thread 40 intron-$site.fasta > intron-$site.aln.fasta 2> /dev/null");
+			#my $return = system("mafft --maxiterate 1000 --localpair intron-$site.fasta > intron-$site.aln.fasta");
+			die "Error occured while running mafft: $!.\n" if ($return);
 			%aligned = parse_fasta("intron-$site.aln.fasta");
 			unlink("intron-$site.aln.fasta");
 		}
 		else {
-		#	foreach my $intron (@{$introns{$site}}) {
-		#		my $seq = $intron->{SEQ};
-		#		my $seqname = $intron->{SEQNAME};
-		#		%aligned = ($seqname => $seq);
-		#	}
 			# Only one contig has an intron here, alignment isn't needed
 			my $intron = @{$introns{$site}}[0];
 			my $seq = $intron->{SEQ};
@@ -182,6 +187,7 @@ foreach my $target (keys %targets) {
 
 		# How many nucleotides are in the final alignment
 		my $align_length = length((values %aligned)[0]);
+		print "finished intron consensus, length = $align_length.\n";
 
 		# Insert aligned sequence or required number of gaps
 		foreach my $seq (keys %{$final_alignments{$target}}) {
@@ -197,6 +203,7 @@ foreach my $target (keys %targets) {
 		}
 		unlink("intron-$site.fasta");
 	}
+	print "\n";
 
 	# Output contigs aligned to target sorted by starting index
 	open(my $out, ">", "$target.spaln.fasta");
@@ -212,10 +219,29 @@ foreach my $target (keys %targets) {
 		print {$out} "$final_alignments{$target}->{$contig}\n";
 	}
 	close($out);
-	
+
+	#die;
 	#print Dumper($final_alignments{$target}),"\n";
-	die;
+	#die;
 }
+
+# Create a consensus for each target which can be used for SNP/haplotype calling
+my %consensuses = consense_alignments(\%final_alignments);
+
+# Output consensus sequence to fasta
+open(my $out, ">", $consensus_output);
+foreach my $consensus (keys %consensuses) {
+	print {$out} ">$consensus\n";
+	print {$out} "$consensuses{$consensus}\n";
+}
+close($out);
+
+# Output troublesome targets
+open($out, ">", "troublesome.txt");
+foreach my $target (keys %troublesome) {
+	print {$out} "$target\n";
+}
+close($out);
 
 sub align_contig {
 	my $opts = shift;
@@ -224,6 +250,7 @@ sub align_contig {
 	my $target_seq = $opts->{TARGET_SEQ};
 	my $target_name = $opts->{TARGET_NAME};
 	my $introns = $opts->{INTRONS};
+	my $ignore_introns = $opts->{IGNORE_INTRONS};
 
 	# Output contig to file
 	open(my $tmp, ">", "$name.fasta");
@@ -231,25 +258,35 @@ sub align_contig {
 	print {$tmp} "$seq\n";
 	close($tmp);
 
+	my $contig_length = length($seq);
+
 	# Output reference to file
 	open($tmp, ">", "target.fasta");
 	print {$tmp} ">$target_name\n";
 	print {$tmp} "$target_seq\n";
 	close($tmp);
 
-#	system("$spaln -Q1 -S4 -LS -O4 $name.fasta target.fasta");
+	# For more human readable output 
+#	system("$spaln -Q1 -S1 -LS -O4 $name.fasta target.fasta");
 #	print "\n\n";
-#	system("$spaln -Q1 -S4 -LS -O5 $name.fasta target.fasta");
+#	system("$spaln -Q1 -S1 -LS -O5 $name.fasta target.fasta");
 #	print "\n\n";
+
 	# Align with spaln -08 output is cigar format
-	chomp(my @spaln_out = `$spaln -Q1 -S4 -LS -O8 $name.fasta target.fasta`);
+	#chomp(my @spaln_out = `$spaln -Q1 -S1 -LS -O8 $name.fasta target.fasta`);
+	#chomp(my @spaln_out = `$spaln -Q3 -S1 -LS -O8 $name.fasta target.fasta`);
+	#chomp(my @spaln_out = `$spaln -Q3 -S1 -LS -O8 -ya2 $name.fasta target.fasta`);
+	chomp(my @spaln_out = `$spaln -Q3 -S1 -LS -O8 -t40 -ya2 $name.fasta target.fasta`);
 	die "Error occured while aligning with spaln: $!.\n" if ($?);
 	unlink("$name.fasta");
 	unlink("target.fasta");
 
+#	print Dumper(\@spaln_out),"\n";
+
 	my $line = shift(@spaln_out);
 	return 0 if (!defined($line));
 
+	# Remove cigar identifier
 	$line =~ s/cigar: //;
 
 	my @line = split(/\s+/, $line);
@@ -257,20 +294,59 @@ sub align_contig {
 	# Extract general alignment info from cigar
 	my ($qid, $qstart, $qend, $qstrand, $tid, $tstart, $tend, $tstrand, $score) = splice(@line, 0, 9);
 
+	# If spaln prefers reverse complement hit
+	if ($tstrand eq '-') {
+		$seq = rev_comp($seq);
+		$contig_seqs{$name} = $seq;
+
+#		# Output contig to file
+#		open(my $tmp, ">", "$name.fasta");
+#		print {$tmp} ">$name\n";
+#		print {$tmp} "$seq\n";
+#		close($tmp);
+#
+#		# Align with spaln -08 output is cigar format
+#		chomp(my @spaln_out = `$spaln -Q1 -S1 -LS -O8 $name.fasta target.fasta`);
+#		die "Error occured while aligning with spaln: $!.\n" if ($?);
+#		unlink("$name.fasta");
+#		unlink("target.fasta");
+#		print Dumper(\@spaln_out),"\n";
+#
+#		my $line = shift(@spaln_out);
+#		return 0 if (!defined($line));
+#
+#		# Remove cigar identifier
+#		$line =~ s/cigar: //;
+#
+#		@line = split(/\s+/, $line);
+#
+#		# Extract general alignment info from cigar
+#		($qid, $qstart, $qend, $qstrand, $tid, $tstart, $tend, $tstrand, $score) = splice(@line, 0, 9);
+
+		$tstrand = "+";
+		$tstart = length($seq) - $tstart - 1;
+		$tend = length($seq) - $tend - 1;
+	}
+#	unlink("$name.fasta");
+#	unlink("target.fasta");
+
 	my $ref_seq = $targets{$tid};
 	my $ref_length = length($ref_seq);
 
 	my $cigar = join("", @line);
-	print "$qid $qstart $qend $tid $tstart $tend\n";
-	print "$cigar\n";
+	#print "  $line\n";
+	print "  $qid $qstart $qend $tid $tstart $tend\n";
+	print "  $cigar\n\n";
 	#die;
 	
+	# Might allow overhangs, especially if $qstart == 0 or $qend == length of reference sequence?
 #	my $end_overhang = substr($assembly{$tid}, 0, $tstart);
 #	my $start_overhang = substr($assembly{$tid}, $tend, length($assembly{$tid}) - $tend);
 
-	#$aligned_contigs{$tid} .= "-" x ($qstart);
+	# Add gaps before alignment begins
 	$final_alignments{$target_name}->{$tid} .= "-" x ($qstart);
 
+	# Loop through cigar alignment
 	my $query_index = 0;
 	my $target_index = 0;
 	while ($cigar =~ /([A-Z])(\d+)/g) {
@@ -279,47 +355,51 @@ sub align_contig {
 
 		# Deletion is an intron
 		if ($type eq "N") {
-		#	push(@{$introns{$qstart + $query_index}}, {SEQNAME => $tid, REF_START => $qstart + $query_index, 
-		#					                           SEQ => substr($assembly{$tid}, $tstart + $target_index, $length)});
-			#push(@{$introns{$qstart + $query_index}}, {SEQNAME => $tid, REF_START => $qstart + $query_index, 
-			push(@{$introns->{$qstart + $query_index}}, {SEQNAME => $tid, REF_START => $qstart + $query_index, 
-							                           SEQ => substr($seq, $tstart + $target_index, $length)});
+			if (!$ignore_introns) {
+				#print "  seq_length: ",length($seq),", tstart: $tstart, tindex: $target_index, tstart+tindex: ",($tstart + $target_index),", substr_length: $length\n";
+				#push(@{$introns->{$qstart + $query_index}}, {SEQNAME => $tid, REF_START => $qstart + $query_index, T_END => $tstart + $target_index + $length,
+				push(@{$introns->{$qstart + $query_index}}, {SEQNAME => $tid, REF_START => $qstart + $query_index, T_START => $tstart + $target_index,
+															 T_END => $tstart + $target_index + $length, SEQ => substr($seq, $tstart + $target_index, $length)});
+			}
 			$target_index += $length;
 		}
-		# Insertion is an extra base in reference
+		# Deletion, missing base in reference compared to contig
+		elsif ($type eq "D") {
+			$target_index += $length;
+		}
+		# Insertion, extra base in reference compared to contig
 		elsif ($type eq "I") {
-			#$aligned_contigs{$tid} .= "-" x $length;
 			$final_alignments{$target_name}->{$tid} .= "-" x $length;
 			$query_index += $length;
 		}
+		# Alignable sequence
 		else {
-			#$aligned_contigs{$tid} .= substr($assembly{$tid}, $tstart + $target_index, $length);
-			#$aligned_contigs{$tid} .= substr($seq, $tstart + $target_index, $length);
+			#print "  seq_length: ",length($seq),", tstart: $tstart, tindex: $target_index, tstart+tindex: ",($tstart + $target_index),", substr_length: $length\n";
+			#die if (!defined(substr($seq, $tstart + $target_index, $length)));
 			$final_alignments{$target_name}->{$tid} .= substr($seq, $tstart + $target_index, $length);
 			$target_index += $length;
 			$query_index += $length;
 		}
 	}
-	#$aligned_contigs{$tid} .= "-" x (length($target_seq) - $qend);
+#	print "\n";
+
+	# Add gaps until alignment ends
 	$final_alignments{$target_name}->{$tid} .= "-" x (length($target_seq) - $qend);
 
 	return;
 }
 
 sub remove_intron_from_exon {
-	#my ($site, $seqname) = @_;
-	#my ($site, $seqname, $introns) = @_;
 	my ($site, $seqname, $target, $introns) = @_;
 	my %introns = %{$introns};
 
-	#my $seq = $aligned_contigs{$seqname};
 	my $seq = $final_alignments{$target}->{$seqname};
 
 	# Extract sequence before and after intron occurence
 	my $pre_intron = substr($seq, 0, $site);
 	my $post_intron = substr($seq, $site, length($seq) - $site);
 
-	# Remove gaps
+	# Remove gaps from sequences
 	(my $pre_intron_ungapped = $pre_intron) =~ s/-//g;
 	(my $post_intron_ungapped = $post_intron) =~ s/-//g;
 
@@ -334,7 +414,7 @@ sub remove_intron_from_exon {
 #		print "pre_intron = ",length($pre_intron_ungapped),"\n";
 #		print "post_intron = ",length($post_intron_ungapped),"\n";
 
-		# Check length of sequence
+		# Check length of sequence is under threshold
 		if (length($pre_intron_ungapped) <= $min_misaligned_intron_length || length($post_intron_ungapped) <= $min_misaligned_intron_length) {
 			
 			# Sequence before intron is most likely intron misaligned as exon
@@ -343,11 +423,8 @@ sub remove_intron_from_exon {
 					push(@{$introns{$site}}, {SEQNAME => $seqname, REF_START => $site, SEQ => $pre_intron_ungapped});
 				}
 				#push(@{$introns{$site}}, {SEQNAME => $seqname, REF_START => $site, SEQ => $pre_intron_ungapped});
-				#print $aligned_contigs{$seqname},"\n";
 				#$aligned_contigs{$seqname} = "-" x length($pre_intron) . $post_intron;
 				$final_alignments{$target}->{$seqname} = "-" x length($pre_intron) . $post_intron;
-				#print $aligned_contigs{$seqname},"\n";
-				#print Dumper($introns{$site}),"\n";
 			}
 			# Sequence after intron is most likely intron misaligned as exon
 			else {
@@ -360,6 +437,107 @@ sub remove_intron_from_exon {
 			}
 		}
 	}
+	return;
+}
+
+sub move_misaligned_introns {
+	#my $introns = shift;
+	my ($introns, $target, $target_seq) = @_;
+
+#	$introns->{374} = {};
+#	$introns->{380} = {};
+#	$introns->{384} = {};
+
+	my %clusters;
+	my %in_cluster;
+	my @sites = sort { $a <=> $b } keys %{$introns};
+	foreach my $index (0 .. $#sites - 1) {
+
+		my $site1 = $sites[$index];
+		next if ($in_cluster{$site1});
+		foreach my $index2 ($index + 1 .. $#sites) {
+
+			my $site2 = $sites[$index2];
+
+			if ($site2 - $site1 <= 10) {
+				if (!exists($in_cluster{$site1})) {
+					push(@{$clusters{$site1}}, $site2);
+					$in_cluster{$site2} = $site1;
+				}
+				else {
+					push(@{$clusters{$in_cluster{$site1}}}, $site2);
+					$in_cluster{$site2} = $site1;
+				}
+			}
+			else {
+				last;
+			}
+		}
+	}
+
+	# Move introns from cluster to correct site
+	#print Dumper(\$introns),"\n\n";
+	foreach my $cluster (keys %clusters) {
+		$troublesome{$target}++;
+		print "Introns occurred too closely to site $cluster\n";
+
+		foreach my $site (reverse(@{$clusters{$cluster}})) {
+			last if ($site == $cluster);
+
+			print "  moving introns at $site...\n";
+
+			foreach my $intron (@{$introns->{$site}}) {
+				#print Dumper(\$intron),"\n";
+				
+				my $diff = $site - $cluster;
+				my $t_start = $intron->{T_START};
+				my $t_end = $intron->{T_END};
+				my $seqname = $intron->{SEQNAME};
+				my $misaligned_tail = substr($contig_seqs{$seqname}, $t_start - $diff, $diff);
+				my $remaining_seq =  substr($contig_seqs{$seqname}, $t_end + 1, length($contig_seqs{$seqname}) - $t_end + 1);
+
+				#print "  tail: ",$misaligned_tail,"\n";
+
+				# Append misaligned sequence which occurred between the two sites to beginning
+				$intron->{SEQ} = $misaligned_tail.$intron->{SEQ};
+
+				# Move this intron to the other site
+				push(@{$introns->{$cluster}}, $intron);
+				#push(@{$introns->{$cluster}}, $misaligned_tail.$intron);
+
+				# Keep the beginning of the current alignment
+				my $current_align = delete($final_alignments{$target}->{$seqname});
+				$current_align = substr($current_align, 0, $cluster);
+
+				#print length($current_align),"\n";
+
+				# Realign exonic sequence after alignment error
+				print "  Realigning exon...\n";
+				align_contig({CONTIG_NAME => $seqname, CONTIG_SEQ => $remaining_seq, TARGET_NAME => $target, TARGET_SEQ => $target_seq, IGNORE_INTRONS => 1});
+
+				# Check that spaln could actually create an alignment (might not happen if remaining sequence is short)
+				if (exists($final_alignments{$target}->{$seqname})) {
+					# Keep the end of this new alignment
+					my $new_align = delete($final_alignments{$target}->{$seqname});
+					substr($new_align, 0, $cluster) = '';
+
+					# New alignment combines start of old alignment and end of new alignment	
+					$final_alignments{$target}->{$seqname} = $current_align.$new_align;
+				}
+				else {
+					# New alignment is start of old alignment
+					$final_alignments{$target}->{$seqname} = $current_align. ('-' x (length($target_seq) - length($current_align)));
+				}
+			}
+			#die;
+
+			delete($introns->{$site});
+		}
+	}
+	#print Dumper(\$introns),"\n";
+
+#	die;
+
 	return;
 }
 
@@ -391,7 +569,6 @@ sub parse_fasta {
 		$line =~ s/^\s+|\s+$//g;
 
 		# Taxon name
-		#if ($line =~ /^>(.*)/) {
 		if ($line =~ /^>(\S+)/) {
 			$taxon = $1;
 		}
@@ -415,7 +592,7 @@ sub rev_comp {
 	my $rev = reverse($seq);
 	foreach my $index (0 .. length($rev) - 1) {
 		my $char = substr($rev, $index, 1);
-		#$rev_comp .= $comp{$char};
+
 		if (exists($comp{$char})) {
 			$rev_comp .= $comp{$char};
 		}
@@ -431,6 +608,51 @@ sub consense_alignments {
 	my $alignment = shift;
 
 	my %consensuses;
+	foreach my $target (keys %{$alignment}) {
+		my %target_alignment = %{$alignment->{$target}};
 
-	return;
+		# Determine length of alignment
+		my $align_length = length((values %target_alignment)[0]);
+
+		# Loop through each site in alignment
+		foreach my $index (0 .. $align_length - 1) {
+
+			# Loop through each sequence in alignment
+			my %site = ('A' => 0, 'T', => 0, 'C' => 0, 'G' => 0);
+			foreach my $sequence (values %target_alignment) {
+				my $char = substr($sequence, $index, 1);
+				$site{$char}++;
+			}
+			
+			# Calculate and append consensus base
+			my $consensus = consense_site(\%site);
+			$consensuses{$target} .= $consensus;
+		}
+	}
+
+	return %consensuses;
+}
+
+sub consense_site {
+	my $site = shift;
+
+	# Sort bases by descending order of frequency
+	my @sorted_bases = sort { $site->{$b} <=> $site->{$a} } keys %{$site};
+
+	# Return most frequent unambiguous base if possible
+	foreach my $base (@sorted_bases) {
+		if ($base =~ /[ACTG]/) {
+			return $base;
+		}
+	}
+
+	# Return most frequent ambiguity code otherwise
+	foreach my $base (@sorted_bases) {
+		if ($base =~ /[A-Z]/) {
+			return $base;
+		}
+	}
+
+	# Should never happen
+	die "Error consensing site:\n",Dumper($site),"\n";
 }
