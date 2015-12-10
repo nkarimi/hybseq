@@ -10,6 +10,7 @@ use Fcntl qw(:flock SEEK_END);
 # Turn on autoflush
 $|++;
 
+my $min_exon_length = 10;
 my $min_misaligned_intron_length = 100;
 
 #my $free_cpus = get_free_cpus();
@@ -91,6 +92,7 @@ my %final_alignments;
 foreach my $target (keys %targets) {
 	#$target = '161|Gorai.012G146100.2|';
 	#$target = '596|Gorai.006G215300.1|';
+	#$target = '959|Gorai.001G017000.1|';
 	#next if $target eq "4143|Gorai.008G286900.1|";
 
 	my @hits = values %{$targets{$target}};
@@ -135,6 +137,7 @@ foreach my $target (keys %targets) {
 	}
 
 	move_misaligned_introns(\%introns, $target, $target_seq);
+	# E_S6_rep_c92523
 
 	print "  Aligning and inserting introns (",(scalar(keys %introns)),")...\n";
 
@@ -220,7 +223,6 @@ foreach my $target (keys %targets) {
 	}
 	close($out);
 
-	#die;
 	#print Dumper($final_alignments{$target}),"\n";
 	#die;
 }
@@ -276,6 +278,7 @@ sub align_contig {
 	#chomp(my @spaln_out = `$spaln -Q1 -S1 -LS -O8 $name.fasta target.fasta`);
 	#chomp(my @spaln_out = `$spaln -Q3 -S1 -LS -O8 $name.fasta target.fasta`);
 	#chomp(my @spaln_out = `$spaln -Q3 -S1 -LS -O8 -ya2 $name.fasta target.fasta`);
+	#chomp(my @spaln_out = `$spaln -Q3 -S1 -LS -O8 -t40 -ya1 $name.fasta target.fasta`);
 	chomp(my @spaln_out = `$spaln -Q3 -S1 -LS -O8 -t40 -ya2 $name.fasta target.fasta`);
 	die "Error occured while aligning with spaln: $!.\n" if ($?);
 	unlink("$name.fasta");
@@ -294,7 +297,7 @@ sub align_contig {
 	# Extract general alignment info from cigar
 	my ($qid, $qstart, $qend, $qstrand, $tid, $tstart, $tend, $tstrand, $score) = splice(@line, 0, 9);
 
-	# If spaln prefers reverse complement hit
+	# If spaln prefers reverse complement hit (even though -S1 should make only forward hits...)
 	if ($tstrand eq '-') {
 		$seq = rev_comp($seq);
 		$contig_seqs{$name} = $seq;
@@ -334,10 +337,18 @@ sub align_contig {
 	my $ref_length = length($ref_seq);
 
 	my $cigar = join("", @line);
-	#print "  $line\n";
+
+	# Check for and remove exons which are too small, assume they are part of the flanking intron
+	while ($cigar =~ /N(\d+)M(\d+)N(\d+)/g) {
+		if ($2 <= $min_exon_length) {
+			print "  $cigar\n";
+			my $total_length = $1 + $2 + $3;
+			$cigar =~ s/N(\d+)M(\d+)N(\d+)/N$total_length/;
+		}
+	}
+
 	print "  $qid $qstart $qend $tid $tstart $tend\n";
 	print "  $cigar\n\n";
-	#die;
 	
 	# Might allow overhangs, especially if $qstart == 0 or $qend == length of reference sequence?
 #	my $end_overhang = substr($assembly{$tid}, 0, $tstart);
@@ -459,7 +470,7 @@ sub move_misaligned_introns {
 
 			my $site2 = $sites[$index2];
 
-			if ($site2 - $site1 <= 10) {
+			if ($site2 - $site1 <= $min_exon_length) {
 				if (!exists($in_cluster{$site1})) {
 					push(@{$clusters{$site1}}, $site2);
 					$in_cluster{$site2} = $site1;
@@ -479,9 +490,10 @@ sub move_misaligned_introns {
 	#print Dumper(\$introns),"\n\n";
 	foreach my $cluster (keys %clusters) {
 		$troublesome{$target}++;
-		print "Introns occurred too closely to site $cluster\n";
+		print "\nIntron(s) occurred too closely to site $cluster\n";
 
-		foreach my $site (reverse(@{$clusters{$cluster}})) {
+		#foreach my $site (reverse(@{$clusters{$cluster}})) {
+		foreach my $site (@{$clusters{$cluster}}) {
 			last if ($site == $cluster);
 
 			print "  moving introns at $site...\n";
