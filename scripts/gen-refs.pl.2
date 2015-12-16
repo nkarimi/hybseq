@@ -93,6 +93,8 @@ foreach my $target (keys %targets) {
 	#$target = '161|Gorai.012G146100.2|';
 	#$target = '596|Gorai.006G215300.1|';
 	#$target = '959|Gorai.001G017000.1|';
+	#$target = '11792|Gorai.007G202700.5|';
+	#$target = '13902|Gorai.011G084700.1|';
 	#next if $target eq "4143|Gorai.008G286900.1|";
 
 	my @hits = values %{$targets{$target}};
@@ -223,6 +225,7 @@ foreach my $target (keys %targets) {
 	}
 	close($out);
 
+	#last;
 	#print Dumper($final_alignments{$target}),"\n";
 	#die;
 }
@@ -254,6 +257,8 @@ sub align_contig {
 	my $introns = $opts->{INTRONS};
 	my $ignore_introns = $opts->{IGNORE_INTRONS};
 
+	#return if $name eq 'E_S6_rep_c7351';
+
 	# Output contig to file
 	open(my $tmp, ">", "$name.fasta");
 	print {$tmp} ">$name\n";
@@ -281,6 +286,7 @@ sub align_contig {
 	#chomp(my @spaln_out = `$spaln -Q3 -S1 -LS -O8 -t40 -ya1 $name.fasta target.fasta`);
 	chomp(my @spaln_out = `$spaln -Q3 -S1 -LS -O8 -t40 -ya2 $name.fasta target.fasta`);
 	die "Error occured while aligning with spaln: $!.\n" if ($?);
+	#exit(0) if $ignore_introns;
 	unlink("$name.fasta");
 	unlink("target.fasta");
 
@@ -452,13 +458,17 @@ sub remove_intron_from_exon {
 }
 
 sub move_misaligned_introns {
-	#my $introns = shift;
 	my ($introns, $target, $target_seq) = @_;
 
-#	$introns->{374} = {};
-#	$introns->{380} = {};
-#	$introns->{384} = {};
+	# Determine number of contigs which contain each intron
+	my %counts;
+	foreach my $site (keys %{$introns}) {
+		foreach my $intron (@{$introns->{$site}}){
+			$counts{$site}++;
+		}
+	}
 
+	# Cluster contigs based on distance
 	my %clusters;
 	my %in_cluster;
 	my @sites = sort { $a <=> $b } keys %{$introns};
@@ -485,70 +495,101 @@ sub move_misaligned_introns {
 			}
 		}
 	}
+	#print Dumper(\%counts),"\n";
+	#print Dumper(\%clusters),"\n";
 
-	# Move introns from cluster to correct site
-	#print Dumper(\$introns),"\n\n";
+	# Move introns which occur too closely to the site with the highest frequency
 	foreach my $cluster (keys %clusters) {
+		unshift(@{$clusters{$cluster}}, $cluster);
+
+		my $most_frequent;
+		my $highest_frequency = 0;
+		foreach my $site (@{$clusters{$cluster}}) {
+			print "$site\n";
+			if ($counts{$site} > $highest_frequency) {
+				$highest_frequency = $counts{$site};
+				$most_frequent = $site;
+			}
+		}
+		print "most frequent for cluster $cluster: $most_frequent ($highest_frequency)\n";
+
+		# Set cluster id to most frequently occuring site
+		if ($most_frequent != $cluster) {
+			$clusters{$most_frequent} = delete($clusters{$cluster});
+		}
+	}
+#	print "clusters:\n";
+#	print Dumper(\%clusters),"\n";
+#	print Dumper(\%counts),"\n";
+
+	my %realign;
+	# Move introns from cluster to correct site
+	#foreach my $cluster (keys %clusters) {
+	foreach my $cluster (sort { $b <=> $a } keys %clusters) {
 		$troublesome{$target}++;
 		print "\nIntron(s) occurred too closely to site $cluster\n";
 
 		#foreach my $site (reverse(@{$clusters{$cluster}})) {
 		foreach my $site (@{$clusters{$cluster}}) {
-			last if ($site == $cluster);
+			#last if ($site == $cluster);
+			next if ($site == $cluster);
 
 			print "  moving introns at $site...\n";
 
 			foreach my $intron (@{$introns->{$site}}) {
 				#print Dumper(\$intron),"\n";
-				
+
 				my $diff = $site - $cluster;
 				my $t_start = $intron->{T_START};
 				my $t_end = $intron->{T_END};
 				my $seqname = $intron->{SEQNAME};
-				my $misaligned_tail = substr($contig_seqs{$seqname}, $t_start - $diff, $diff);
-				my $remaining_seq =  substr($contig_seqs{$seqname}, $t_end + 1, length($contig_seqs{$seqname}) - $t_end + 1);
 
-				#print "  tail: ",$misaligned_tail,"\n";
-
-				# Append misaligned sequence which occurred between the two sites to beginning
-				$intron->{SEQ} = $misaligned_tail.$intron->{SEQ};
-
-				# Move this intron to the other site
-				push(@{$introns->{$cluster}}, $intron);
-				#push(@{$introns->{$cluster}}, $misaligned_tail.$intron);
-
-				# Keep the beginning of the current alignment
-				my $current_align = delete($final_alignments{$target}->{$seqname});
-				$current_align = substr($current_align, 0, $cluster);
-
-				#print length($current_align),"\n";
-
-				# Realign exonic sequence after alignment error
-				print "  Realigning exon...\n";
-				align_contig({CONTIG_NAME => $seqname, CONTIG_SEQ => $remaining_seq, TARGET_NAME => $target, TARGET_SEQ => $target_seq, IGNORE_INTRONS => 1});
-
-				# Check that spaln could actually create an alignment (might not happen if remaining sequence is short)
-				if (exists($final_alignments{$target}->{$seqname})) {
-					# Keep the end of this new alignment
-					my $new_align = delete($final_alignments{$target}->{$seqname});
-					substr($new_align, 0, $cluster) = '';
-
-					# New alignment combines start of old alignment and end of new alignment	
-					$final_alignments{$target}->{$seqname} = $current_align.$new_align;
+				# Add sequence to realignment hash
+				if (!exists($realign{$seqname})) {
+					$realign{$seqname} = $contig_seqs{$seqname};
 				}
+
+				# Moving intron forwards
+				if ($diff < 0) {
+					my $misaligned_tail = substr($contig_seqs{$seqname}, $t_start, -1 * $diff);
+
+					# Remove misaligned sequence from intron
+					$intron->{SEQ} =~ s/^\Q$misaligned_tail\E//;
+				}
+				# Moving intron backwards
 				else {
-					# New alignment is start of old alignment
-					$final_alignments{$target}->{$seqname} = $current_align. ('-' x (length($target_seq) - length($current_align)));
-				}
-			}
-			#die;
+					my $misaligned_tail = substr($contig_seqs{$seqname}, $t_start - $diff, $diff);
 
+					# Append misaligned sequence which occurred between the two sites to beginning
+					$intron->{SEQ} = $misaligned_tail.$intron->{SEQ};
+				}
+
+				# Correct intron's start indices
+				$intron->{T_START} -= $diff;
+				$intron->{REF_START} -= $diff;
+
+				# Move this intron to its proper location
+				push(@{$introns->{$cluster}}, $intron);
+
+				# Remove intron from sequence in realignment hash
+				substr($realign{$seqname}, $intron->{T_START}, $intron->{T_END} - $intron->{T_START}) = '';
+			}
 			delete($introns->{$site});
 		}
 	}
-	#print Dumper(\$introns),"\n";
 
-#	die;
+	# Realign exons of misaligned sequences
+	foreach my $seqname (keys %realign) {
+		my $seq = $realign{$seqname};
+
+		# Delete incorrect alignment we currently have
+		delete($final_alignments{$target}->{$seqname});
+
+		# Realign exonic sequence after alignment error
+		# TODO: add large penalty to prevent additional introns?
+		print "  Realigning exon...\n";
+		align_contig({CONTIG_NAME => $seqname, CONTIG_SEQ => $seq, TARGET_NAME => $target, TARGET_SEQ => $target_seq, IGNORE_INTRONS => 1});
+	}
 
 	return;
 }
@@ -633,6 +674,7 @@ sub consense_alignments {
 			my %site = ('A' => 0, 'T', => 0, 'C' => 0, 'G' => 0);
 			foreach my $sequence (values %target_alignment) {
 				my $char = substr($sequence, $index, 1);
+				die "$target\n" if (!defined($char));
 				$site{$char}++;
 			}
 			
