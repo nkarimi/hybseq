@@ -90,11 +90,13 @@ my %target_seqs = parse_fasta($targets);
 my %troublesome;
 my %final_alignments;
 foreach my $target (keys %targets) {
+	# list of defeated troublesome contigs
 	#$target = '161|Gorai.012G146100.2|';
 	#$target = '596|Gorai.006G215300.1|';
 	#$target = '959|Gorai.001G017000.1|';
 	#$target = '11792|Gorai.007G202700.5|';
 	#$target = '13902|Gorai.011G084700.1|';
+	#$target = '8547|Gorai.003G086700.1|';
 	#next if $target eq "4143|Gorai.008G286900.1|";
 
 	my @hits = values %{$targets{$target}};
@@ -571,10 +573,20 @@ sub move_misaligned_introns {
 				# Move this intron to its proper location
 				push(@{$introns->{$cluster}}, $intron);
 
-				# Remove intron from sequence in realignment hash
-				substr($realign{$seqname}, $intron->{T_START}, $intron->{T_END} - $intron->{T_START}) = '';
+#				# Remove intron from sequence in realignment hash
+#				substr($realign{$seqname}, $intron->{T_START}, $intron->{T_END} - $intron->{T_START}) = '';
 			}
 			delete($introns->{$site});
+		}
+	}
+
+	# Delete all introns from sequences we are realigning to minimize chance of misalignment
+	foreach my $site (sort { $b <=> $a } keys %{$introns}) {
+		foreach my $intron (@{$introns->{$site}}) {
+			my $seqname = $intron->{SEQNAME};
+			if (exists($realign{$seqname})) {
+				substr($realign{$seqname}, $intron->{T_START}, $intron->{T_END} - $intron->{T_START}) = '';
+			}
 		}
 	}
 
