@@ -30,8 +30,10 @@ my $spaln = check_path_for_exec("spaln");
 
 # Parse command line invocation
 my $targets;
+my $exon_only;
 GetOptions(
 	't|targets=s' => \$targets,
+	'e|exon-only' => \$exon_only,
 );
 
 my $input = shift;
@@ -87,6 +89,7 @@ foreach my $target (keys %targets) {
 	#$target = '8547|Gorai.003G086700.1|';
 	#$target = '1984|Gorai.001G079800.1|';
 	#$target = '7115|Gorai.005G200400.1|';
+	#$target = '20778|Gorai.005G183500.2|';
 
 	my @hits = values %{$targets{$target}};
 	my $target_seq = $target_seqs{$target};
@@ -95,7 +98,10 @@ foreach my $target (keys %targets) {
 
 	# Stores locations and sequences of introns
 	my %introns;
-	my %potential_introns = {START => {}, END => {}};
+	#my %potential_introns = {STARTS => {}, ENDS => ()};
+	my %potential_introns; 
+	$potential_introns{ENDS} = {};
+	$potential_introns{STARTS} = {};
 	$final_alignments{$target}->{$target} = $target_seq;
 
 	# Use spaln to align exons of each contig with the reference and identify introns
@@ -115,15 +121,10 @@ foreach my $target (keys %targets) {
 	}
 
 	# Think remove_intron_from_exon needs to be run first?
-	#insert_potential_introns(\%potential_introns, $target, $target_seq);
-	#insert_potential_introns(\%introns, \%potential_introns, $target, $target_seq);
-	#die;
-	#print Dumper(\%potential_introns),"\n";
-	#die;
 
 	move_misaligned_introns(\%introns, $target, $target_seq);
 	insert_potential_introns(\%introns, \%potential_introns, $target, $target_seq);
-	# E_S6_rep_c92523
+	#my $meow = insert_potential_introns(\%introns, \%potential_introns, $target, $target_seq);
 
 	print "  Aligning and inserting introns (",(scalar(keys %introns)),")...\n";
 
@@ -242,6 +243,8 @@ sub align_contig {
 	my $potential_introns = $opts->{POT_INTRONS};
 	my $ignore_introns = $opts->{IGNORE_INTRONS};
 
+	$ignore_introns++ if ($exon_only);
+
 	#return if $name eq 'E_S6_rep_c7351';
 
 	# Output contig to file
@@ -318,7 +321,7 @@ sub align_contig {
 	print "  $cigar\n\n";
 
 	# Handle potential introns occuring at alignment overhangs
-	if ($potential_introns) {
+	if ($potential_introns && !$ignore_introns) {
 		# Might allow overhangs, especially if $qstart == 0 or $qend == length of reference sequence?
 		# Set maximum length, 300 bp? truncate or completely remove?
 	
@@ -494,10 +497,10 @@ sub insert_potential_introns {
 			}
 		}
 	}
-#	print Dumper(\%clusters),"\n";
+	#print Dumper(\%clusters),"\n";
 #	print Dumper(\%ends),"\n";
 #	print Dumper(\%starts),"\n";
-#	die;
+	#die;
 
 	# Remove clusters which cluster to a spanned intron, add sequences to that intron
 	CLUSTER: foreach my $cluster (keys %clusters) {
@@ -539,12 +542,14 @@ sub insert_potential_introns {
 #	print Dumper($ends{1186}),"\n";
 #	print Dumper($starts{1186}),"\n";
 #	die;
+	my $min_offset = 0;
 	
 	# Iterate through each cluster
 	my %cluster_lengths;
 	foreach my $cluster (sort { $b <=> $a } keys %clusters) {
 	#foreach my $cluster (sort { $a <=> $b } keys %clusters) {
 		#my $cluster = 1186;
+		#my $cluster = 204;
 
 		my $cluster_id = join("-", @{$clusters{$cluster}});
 
@@ -604,7 +609,7 @@ sub insert_potential_introns {
 				%aligned_ends = parse_fasta("intron-$cluster_id-ends.fasta");
 			}
 			unlink("intron-$cluster_id-ends.fasta");
-#			unlink("intron-$cluster_id-ends.aln.fasta");
+			unlink("intron-$cluster_id-ends.aln.fasta");
 			
 			# Outputting starting sequences of intron
 			my $start_count = 0;
@@ -640,15 +645,11 @@ sub insert_potential_introns {
 				%aligned_starts = parse_fasta("intron-$cluster_id-starts.fasta");
 			}
 			unlink("intron-$cluster_id-starts.fasta");
-#			unlink("intron-$cluster_id-starts.aln.fasta");
+			unlink("intron-$cluster_id-starts.aln.fasta");
 
 			# Append N's to indicate the intron isn't bridged?
 
 			# cap3 to join?
-
-			# Determine lengths of start and end alignments
-			my $aligned_end_length = length((values %aligned_ends)[0]);
-			my $aligned_start_length = length((values %aligned_starts)[0]);
 
 #			print Dumper(\%aligned_starts),"\n";
 #			print Dumper(\%contigs),"\n";
@@ -660,13 +661,39 @@ sub insert_potential_introns {
 
 			# Determine maximum offset, used to pad insert with correct number of gaps
 			my $max_offset = 0;
+			#my $min_offset = 0;
+			$min_offset = 0;
 			foreach my $seq (keys %contigs) {
 				if ($max_start - $contigs{$seq} > $max_offset) {
 					$max_offset = $max_start - $contigs{$seq};
+					#$max_offset = abs($max_start - $contigs{$seq});
+				}
+				if (!defined($min_offset) || $max_start - $contigs{$seq} < $min_offset) {
+					$min_offset = $max_start - $contigs{$seq};
 				}
 			}
 
-			# So we can correct spanned intron indices
+			# Remove exon from intron alignment if we have end sequences which starting aligning farther away due to mismatch in their exon
+			if ($min_offset < 0) {
+				my $diff = abs($min_offset) + $max_offset;
+				foreach my $seq (keys %aligned_ends) {
+					#print substr($aligned_ends{$seq}, length($aligned_ends{$seq}) - $diff, $diff),"\n";
+
+					#my $exon = substr($aligned_ends{$seq}, length($aligned_ends{$seq}) - $diff, $diff);
+					substr($aligned_ends{$seq}, length($aligned_ends{$seq}) - $diff, $diff) = '';
+
+#					if ($exon !~ /^-+$/) {
+#						substr($final_alignments{$target}->{$seq}, $max_start - $max_offset, $max_offset) = $exon;
+#					}
+				}
+				#print "WODOTA: $cluster\n";
+			}
+
+			# Determine lengths of start and end alignments
+			my $aligned_end_length = length((values %aligned_ends)[0]);
+			my $aligned_start_length = length((values %aligned_starts)[0]);
+
+			# For correcting spanned intron indices after we insert the partial introns
 			#$cluster_lengths{$cluster} = $aligned_end_length + $aligned_start_length;
 			$cluster_lengths{$cluster} = $aligned_end_length + $aligned_start_length + $max_offset;
 			
@@ -679,7 +706,11 @@ sub insert_potential_introns {
 					#print "inserting end at $contigs{$seq}...\n";
 					#substr($final_alignments{$target}->{$seq}, $contigs{$seq}, 0) = $aligned_ends{$seq};	
 					
-					my $offset = $max_start - $contigs{$seq};
+				#	if ($offset < 0) {
+				#		$offset = $max_offset;
+				#	}
+					my $offset = $max_offset;
+
 					my $misaligned = substr($final_alignments{$target}->{$seq}, $max_start - $offset, $offset);
 					substr($final_alignments{$target}->{$seq}, $max_start - $offset, $offset) = '-' x $offset;
 					substr($final_alignments{$target}->{$seq}, $max_start, 0) = "-" x ($max_offset - length($misaligned)).$aligned_ends{$seq}.$misaligned;
@@ -719,12 +750,13 @@ sub insert_potential_introns {
 #				}
 #			}
 			print "finished intron insertion, length of inserted sequence = ",($aligned_start_length + $aligned_end_length + $max_offset),".\n";
-			#die;
 		}
 		else {
-			print "  $cluster == cluster? more like laCkLUSTER\n";
+			print "    $cluster == cluster? more like laCkLUSTER\n";
+			delete($clusters{$cluster});
 		}
 	}
+	#die;
 
 	# Correct intron indices being off now
 	print "\n  Updating indices...\n";
@@ -745,6 +777,7 @@ sub insert_potential_introns {
 	# Special cases for end at 0 and length of target sequence
 
 	return;
+	#return 1 if ($min_offset < 0 && $target ne "20778|Gorai.005G183500.2|");
 }
 
 sub move_misaligned_introns {
