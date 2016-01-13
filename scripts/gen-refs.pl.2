@@ -93,6 +93,7 @@ foreach my $target (keys %targets) {
 	#$target = '7115|Gorai.005G200400.1|';
 	#$target = '20778|Gorai.005G183500.2|';
 	#$target = '20311|Gorai.011G239400.1|';
+	#$target = '2996|Gorai.004G267500.2|';
 
 	my @hits = keys %{$targets{$target}};
 	my $target_seq = $target_seqs{$target};
@@ -213,7 +214,6 @@ foreach my $target (keys %targets) {
 
 # Create a consensus for each target which can be used for SNP/haplotype calling
 my %consensuses = consense_alignments(\%final_alignments);
-#die;
 
 # Output consensus sequence to fasta
 open(my $out, ">", $consensus_output);
@@ -554,6 +554,7 @@ sub insert_potential_introns {
 			foreach my $site (@{$clusters{$cluster}}) {
 				next if ($sites{$site});
 
+				# Calculate minimum end
 				if (exists($ends{$site})) {
 					foreach my $intron (@{$ends{$site}}) {
 						my $seqname = $intron->{SEQNAME};
@@ -563,6 +564,7 @@ sub insert_potential_introns {
 					}
 				}
 
+				# Calculate maximum start
 				if (exists($starts{$site})) {
 					foreach my $intron (@{$starts{$site}}) {
 						my $seqname = $intron->{SEQNAME};
@@ -575,10 +577,17 @@ sub insert_potential_introns {
 			undef(%sites);
 			my $max_offset = $max_start - $min_end;	
 
+			# Account for nonoverlapping intron start and ends
+			if ($max_offset < 0) {
+				($max_start, $min_end) = fix_nonoverlapping_unspanned_introns($target, $target_seq, \%starts, \%ends, $max_start, $min_end, \%contigs, $clusters{$cluster});
+				$max_offset = $max_start - $min_end;	
+			}
+
 			# Add spacer exon to facilitate alignment
 			foreach my $site (@{$clusters{$cluster}}) {
 				next if ($sites{$site});
 
+				# Add exon to alignments containing intron ends
 				if (exists($ends{$site})) {
 					foreach my $intron (@{$ends{$site}}) {
 						my $seqname = $intron->{SEQNAME};
@@ -586,12 +595,14 @@ sub insert_potential_introns {
 						my $diff = $contigs{$seqname} - $min_end;
 						my $exon = substr($contig_seqs{$seqname}, $tend, $exon_length - $diff);
 
-						die "Could not obtain exon for alignment of $cluster, $seqname ($tend, ",($exon_length- $diff),")\n" if (!defined($exon));
+						# Shouldn't happen with an exon length of 10
+						die "Could not obtain exon for alignment of $cluster, $seqname ($tend, ",($exon_length - $diff),")\n" if (!defined($exon));
 						$intron->{SEQ} .= $exon;
 						$sites{$site}++;
 					}
 				}
 
+				# Add exon to alignments containing intron starts
 				if (exists($starts{$site})) {
 					foreach my $intron (@{$starts{$site}}) {
 						my $seqname = $intron->{SEQNAME};
@@ -599,7 +610,8 @@ sub insert_potential_introns {
 						my $diff = $max_start - $contigs{$seqname};
 						my $exon = substr($contig_seqs{$seqname}, $tstart - $exon_length + $diff, $exon_length - $diff);
 
-						die "Could not obtain exon for alignment of $cluster, $seqname (",($tstart - $exon_length + $diff),", ",($exon_length- $diff),")\n" if (!defined($exon));
+						# Shouldn't happen with an exon length of 10
+						die "Could not obtain exon for alignment of $cluster, $seqname (",($tstart - $exon_length + $diff),", ",($exon_length - $diff),")\n" if (!defined($exon));
 						$intron->{SEQ} = $exon.$intron->{SEQ};
 						$sites{$site}++;
 					}
@@ -622,9 +634,9 @@ sub insert_potential_introns {
 						my $seqname = $intron->{SEQNAME};
 						print {$tmp} ">$seqname\n";
 						print {$tmp} "$seq\n";
-						$contigs{$seqname} = $site;
+						#$contigs{$seqname} = $site;
 						$end_count++;
-						$min_end = $site if (!defined($min_end) || $site < $min_end);
+						#$min_end = $site if (!defined($min_end) || $site < $min_end);
 						$sites{$site}++;
 					}
 				}
@@ -644,7 +656,7 @@ sub insert_potential_introns {
 				%aligned_ends = parse_fasta("intron-$cluster_id-ends.fasta");
 			}
 			unlink("intron-$cluster_id-ends.fasta");
-			#unlink("intron-$cluster_id-ends.aln.fasta");
+			unlink("intron-$cluster_id-ends.aln.fasta");
 			
 			# Outputting starting sequences of intron
 			my $start_count = 0;
@@ -659,9 +671,9 @@ sub insert_potential_introns {
 						my $seqname = $intron->{SEQNAME};
 						print {$tmp} ">$seqname\n";
 						print {$tmp} "$seq\n";
-						$contigs{$seqname} = $site;
+						#$contigs{$seqname} = $site;
 						$start_count++;
-						$max_start = $site if ($site > $max_start);
+						#$max_start = $site if ($site > $max_start);
 						$sites{$site}++;
 					}
 				}
@@ -697,7 +709,7 @@ sub insert_potential_introns {
 				# Intronic sequence identified for this contig
 				if (exists($aligned_ends{$seq})) {
 					#print "inserting end at $contigs{$seq}...\n";
-					my $diff = $contigs{$seq} - $min_end;
+					#my $diff = $contigs{$seq} - $min_end;
 					
 					my $offset = $max_offset;
 					substr($final_alignments{$target}->{$seq}, $min_end, $exon_length) = "-" x ($max_offset).$aligned_ends{$seq};
@@ -714,7 +726,7 @@ sub insert_potential_introns {
 
 				# Intronic sequence identified for this contig
 				if (exists($aligned_starts{$seq})) {
-					my $diff = $max_start - $contigs{$seq};
+					#my $diff = $max_start - $contigs{$seq};
 					#print "inserting start at $contigs{$seq}...\n";
 					substr($final_alignments{$target}->{$seq}, $max_start - $exon_length, $exon_length) = $aligned_starts{$seq};
 				}
@@ -764,6 +776,196 @@ sub insert_potential_introns {
 
 	return;
 	#return 1 if ($min_offset < 0 && $target ne "20778|Gorai.005G183500.2|");
+}
+
+sub fix_nonoverlapping_unspanned_introns {
+	my ($target, $target_seq, $starts, $ends, $max_start, $min_end, $contigs, $cluster) = @_;
+
+	my @cluster = @{$cluster};
+
+	my $exon_length = 10;
+	my $max_offset = $max_start - $min_end;
+
+	my $unaligned_exon = substr($target_seq, $max_start, abs($max_offset));
+	my $unaligned_exon_padded = substr($target_seq, $max_start - 10, abs($max_offset) + 20);
+
+	# Create a fasta file to facilitate placement of unaligned exon
+	open(my $tmp, ">", "intron-overlap.fasta");
+	print {$tmp} ">unaligned_exon\n";
+	print {$tmp} "$unaligned_exon_padded\n";
+
+	# Get the intron end sequence as well its following exon
+	my $end_intron = @{$ends->{$min_end}}[0];
+	my $end_seqname = $end_intron->{SEQNAME};
+	my $tend = $end_intron->{T_END};
+	my $end_diff = $contigs->{$end_seqname} - $min_end;
+	my $end_exon = substr($contig_seqs{$end_seqname}, $tend, $exon_length - $end_diff);
+	$end_intron = substr($end_intron->{SEQ}, length($end_intron->{SEQ}) - $exon_length, $exon_length);
+
+	# Get the intron start sequence as well its preceeding exon
+	my $start_intron = @{$starts->{$max_start}}[0];
+	my $start_seqname = $start_intron->{SEQNAME};
+	my $tstart = $start_intron->{T_START};
+	my $start_diff = $max_start - $contigs->{$start_seqname};
+	my $start_exon = substr($contig_seqs{$start_seqname}, $tstart - $exon_length + $start_diff, $exon_length - $start_diff);
+	$start_intron = substr($start_intron->{SEQ}, 0, $exon_length);
+
+	my $junction = "$start_exon$start_intron".("n" x 20)."$end_intron$end_exon";
+	print {$tmp} ">junction\n";
+	print {$tmp} "$junction\n";
+	close($tmp);
+
+	#my $return = system("$mafft --maxiterate 1000 --localpair --lop -20 --lep 0 --thread $free_cpus intron-$cluster_id-overlap.fasta > intron-$cluster_id-overlap.aln.fasta 2> /dev/null");
+	my $return = system("$mafft --maxiterate 1000 --genafpair --ep 0 --op 10 --thread $free_cpus intron-overlap.fasta > intron-overlap.aln.fasta 2> /dev/null");
+	die "Error occured while running mafft: $!.\n" if ($return);
+
+	my %align = parse_fasta("intron-overlap.aln.fasta");
+	# Testing
+	#%align = ('unaligned_exon' => 'ACAAGTACAG-------------------------------CACCTCCCCTGAAATTAAT', 'junction' => 'ACAAGTACAGGTTGGTGCTGNNNNNNNNNNNNNNNNNNNNGCTCCACCTTTGAAATTAAT');
+	#%align = ('unaligned_exon' => 'ACAAGTACAGCACCTCCCC-------------------------------TGAAATTAAT', 'junction' => 'ACAAGTACAGGTTGGTGCTGNNNNNNNNNNNNNNNNNNNNGCTCCACCTTTGAAATTAAT');
+	#%align = ('unaligned_exon' => 'ACAAGTACAGCACC-------------------------------TCCCCTGAAATTAAT', 'junction' => 'ACAAGTACAGGTTGGTGCTGNNNNNNNNNNNNNNNNNNNNGCTCCACCTTTGAAATTAAT');
+
+	my $aligned_exon = $align{unaligned_exon};
+
+	my %sites;
+	my $new_min_end = $min_end;
+	my $new_max_start = $max_start;
+
+	# Check if ungapped exon is present in alignment or if it was split by gaps
+	if ($aligned_exon =~ /\Q$unaligned_exon\E/) {
+		my $start = $-[0];
+
+		# Unaligned exon matches with 'intron' start
+		if ($start < length($junction) / 2) {
+
+			# Remove the sequence from intron and add to exon
+			foreach my $site (@cluster) {
+				next if ($sites{$site});
+
+				# Fix intron starts
+				if (exists($starts->{$site})) {
+					foreach my $intron (@{$starts->{$site}}) {
+						my $seqname = $intron->{SEQNAME};
+						my $tstart = $intron->{T_START};
+
+						# Extract the misaligned exon
+						my $start_diff = abs($max_offset);
+						$start_intron = substr($intron->{SEQ}, 0, $start_diff);
+
+						# Remove misaligned exon and add to exon alignment
+						substr($intron->{SEQ}, 0, $start_diff) = '';
+						substr($final_alignments{$target}->{$seqname}, $contigs->{$seqname}, $start_diff) = $start_intron;
+
+						# Update indices
+						$intron->{T_START} += $start_diff;
+						$contigs->{$seqname} += $start_diff;
+						$intron->{REF_START} += $start_diff;
+
+						$new_max_start = $contigs->{$seqname} if (!defined($new_max_start) || $contigs->{$seqname} > $new_max_start);
+					}
+				}
+			}
+			undef(%sites);
+		}
+		# Unaligned exon matches with 'intron' end
+		else {
+
+			# Remove the sequence from intron and add to exon
+			foreach my $site (@cluster) {
+				next if ($sites{$site});
+
+				# Fix intron ends
+				if (exists($ends->{$site})) {
+					foreach my $intron (@{$ends->{$site}}) {
+						my $seqname = $intron->{SEQNAME};
+						my $tend = $intron->{T_END};
+
+						# Extract the misaligned exon
+						my $end_diff = abs($max_offset);
+						$end_intron = substr($intron->{SEQ}, length($intron->{SEQ}) - $end_diff, $end_diff);
+
+						# Remove misaligned exon and and to exon alignment
+						substr($intron->{SEQ}, length($intron->{SEQ}) - $end_diff, $end_diff) = '';
+						substr($final_alignments{$target}->{$seqname}, $contigs->{$seqname} - $end_diff, $end_diff) = $end_intron;
+
+						# Update indices
+						$intron->{T_END} -= $end_diff;
+						$contigs->{$seqname} -= $end_diff;
+
+						$new_min_end = $contigs->{$seqname} if (!defined($new_min_end) || $contigs->{$seqname} < $new_min_end);
+					}
+				}
+			}
+			undef(%sites);
+		}
+	}
+	else {
+
+		# Determine where gap was placed and exon was split
+		if ($aligned_exon =~ /-+/) {
+
+			# Where gap was placed
+			my $start = $-[0];
+
+			# Where unaligned exon was split
+			my $exon_end = $start - $exon_length;
+
+			# Fix the sequences in this cluster
+			foreach my $site (@cluster) {
+				next if ($sites{$site});
+
+				# Fix intron starts
+				if (exists($starts->{$site})) {
+					foreach my $intron (@{$starts->{$site}}) {
+						my $seqname = $intron->{SEQNAME};
+						my $tstart = $intron->{T_START};
+
+						# Extract the misaligned exon
+						my $start_diff = $exon_end;
+						$start_intron = substr($intron->{SEQ}, 0, $start_diff);
+
+						# Remove misaligned exon and and to exon alignment
+						substr($intron->{SEQ}, 0, $start_diff) = '';
+						substr($final_alignments{$target}->{$seqname}, $contigs->{$seqname}, $start_diff) = $start_intron;
+
+						# Update indices
+						$intron->{T_START} += $start_diff;
+						$contigs->{$seqname} += $start_diff;
+						$intron->{REF_START} += $start_diff;
+
+						$new_max_start = $contigs->{$seqname} if (!defined($new_max_start) || $contigs->{$seqname} > $new_max_start);
+					}
+				}
+
+				# Fix intron ends
+				if (exists($ends->{$site})) {
+					foreach my $intron (@{$ends->{$site}}) {
+						my $seqname = $intron->{SEQNAME};
+						my $tend = $intron->{T_END};
+
+						# Extract the misaligned exon
+						my $end_diff = length($unaligned_exon) - $exon_end;
+						$end_intron = substr($intron->{SEQ}, length($intron->{SEQ}) - $end_diff, $end_diff);
+
+						# Remove misaligned exon and and to exon alignment
+						substr($intron->{SEQ}, length($intron->{SEQ}) - $end_diff, $end_diff) = '';
+						substr($final_alignments{$target}->{$seqname}, $contigs->{$seqname} - $end_diff, $end_diff) = $end_intron;
+
+						# Update indices
+						$intron->{T_END} -= $end_diff;
+						$contigs->{$seqname} -= $end_diff;
+
+						$new_min_end = $contigs->{$seqname} if (!defined($new_min_end) || $contigs->{$seqname} < $new_min_end);
+					}
+				}
+			}
+			undef(%sites);
+		}
+	}
+	unlink("intron-overlap.fasta");
+	unlink("intron-overlap.aln.fasta");
+
+	return ($new_max_start, $new_min_end);
 }
 
 sub move_misaligned_introns {
