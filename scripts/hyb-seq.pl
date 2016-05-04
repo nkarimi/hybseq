@@ -69,6 +69,7 @@ foreach my $species_name (keys %config) {
 	}
 }
 
+# Old script run behavior
 ## Create consensus sequences from each mira assembly
 #foreach my $species_name (keys %config) {
 #	my $species = $config{$species_name};
@@ -124,6 +125,7 @@ else {
 
 #TODO: MOVE NEW STUFF TO SUBROUTINE
 
+# Move into superassembly directory
 chdir("$superassembly_dir");
 
 # Check if an alignment from the superassembly exists for all targets
@@ -132,25 +134,20 @@ foreach my $target (keys %targets) {
 	$generate_consensus++ if (!-e "$target.fasta");	
 }
 
-# Uncomment when running for the first time
-# Generate references with superassembly
+# Generate references for targets using the superassembly
 if ($generate_consensus) {
 ##	my $return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$targets'");
 ##	my $return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$targets' -c");
 ##	my $return = system("$script_dir/gen-refs.pl '$superassembly' -t '$targets' -c");
 ##	die "Error generating references '$return' for '$superassembly'.\n" if ($return); 
 
+	# Run once to determine intron locations
+	my $return = system("$script_dir/gen-refs.pl '$superassembly' -t '$targets' -c");
+	die "Error generating references '$return' for '$superassembly'.\n" if ($return); 
 
-#	# Run once to determine intron locations
-##	my $return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$targets' -c");
-#	my $return = system("$script_dir/gen-refs.pl '$superassembly' -t '$targets' -c");
-#	die "Error generating references '$return' for '$superassembly'.\n" if ($return); 
-#
-#	# Run again to improve contig coverage, don't allow introns
-##	$return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$superassembly_consensus' -c -e");
-#	#$return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$superassembly_consensus' -c -e -x");
-#	$return = system("$script_dir/gen-refs.pl '$superassembly' -t '$superassembly_consensus' -c -e");
-#	die "Error generating references '$return' for '$superassembly'.\n" if ($return); 
+	# Run again using previous consensus as targets improve contig coverage, don't allow introns this time
+	$return = system("$script_dir/gen-refs.pl '$superassembly' -t '$superassembly_consensus' -c -e");
+	die "Error generating references '$return' for '$superassembly'.\n" if ($return); 
 }
 #die;
 
@@ -167,18 +164,13 @@ my %consensuses;
 foreach my $target (keys %targets) {
 	my $target_alignment = $target.".fasta";
 
-	next if (!-e "$target_alignment"); # For debugging
-	#(my $target_name = $target_alignment) =~ s/\.fasta//;
+	#next if (!-e "$target_alignment"); # For debugging
 	
 	# Write target consensus to separate file
 	open(my $out_fasta, ">", "$target.con.fasta");
 	print {$out_fasta} ">$target\n";	
 	print {$out_fasta} "$superassembly_consensus{$target}\n";	
-	#print {$out_fasta} "$targets{$target}\n";	
 	close($out_fasta);
-
-	 # Skip file containing target consensuses
-	#next if ($target_alignment =~ /\.con\.fasta$/);
 
 	# TODO: break up this step so restarting is less repetitive
 	# Run RAxML rapid bootstrap
@@ -191,28 +183,33 @@ foreach my $target (keys %targets) {
 
 		# TODO: add conversion to phylip to avoid issues with RAxML version < 8?
 		# TODO: add raxml settings to global options, add to contig file
+		# Bootstrapped RAxML
 		#my $return = system("$raxml -f a -m GTRGAMMA -s '$target_alignment' -n '$target' -p 123 -x 321 -# 100 -T $raxml_cpus");
 		my $return = system("$raxml -m GTRGAMMA -s '$target_alignment' -n '$target' -p 123 -T $raxml_cpus");
 		die "Error running RAxML on '$target_alignment'.\n" if ($return); 
 
 		# Clean up unneeded RAxML output files
+		# Files to remove if a bootstrap is run
 #		unlink("RAxML_bestTree.$target", "RAxML_bipartitionsBranchLabels.$target", 
 #			   "RAxML_bootstrap.$target", "RAxML_info.$target");
 		unlink("RAxML_info.$target", "RAxML_log.$target", 
 		       "RAxML_parsimonyTree.$target", "RAxML_result.$target", "$target.reduced");
-
 	}
 
-###     Comments for rerunning joined paralogs
-#	# Cluster contigs into two groups based on RAxML tree topology
-#	#my $return = system("$script_dir/separate-contigs.r 'RAxML_bestTree.$target' >/dev/null");
-##	my $return = system("$script_dir/separate-contigs.r.2 'RAxML_bestTree.$target' '$membership_groups' >/dev/null");
-#	my $return = system("$script_dir/separate-contigs.r 'RAxML_bestTree.$target' '$membership_groups' >/dev/null");
-#	die "Error separating contigs in 'RAxML_bestTree.$target'.\n" if ($return); 
-	
+	# Check if paralogs already exist for this target, otherwise use separate-contigs.r to split
+	my @paralogs = glob($target."_paralog*.tre");
+	if (!@paralogs) {
+
+		# Cluster contigs into subtrees based on tree topology and membership groups
+		my $return = system("$script_dir/separate-contigs.r 'RAxML_bestTree.$target' '$membership_groups' >/dev/null");
+		die "Error separating contigs in 'RAxML_bestTree.$target'.\n" if ($return); 
+
+		# Reassign values
+		@paralogs = glob($target."_paralog*.tre");
+	}
+
 	# Determine contigs present in each paralog, and write their sequences to two separate files
 	my %used_contigs;
-	my @paralogs = glob($target."_paralog*.tre");
 	foreach my $paralog (@paralogs) {
 
 		# Extract paralog name
@@ -223,12 +220,12 @@ foreach my $target (keys %targets) {
 		print $consensus," = consensus\n";
 		print "$target.con.fasta = target\n";
 
-#		####
-#		# For outputting single target of multicopy targets
-#		if (scalar(@paralogs) > 1) {
-#			$consensuses{$target} = $superassembly_consensus{$target};
-#			last;
-#		}
+##		####
+##		# For outputting single target of multicopy targets
+##		if (scalar(@paralogs) > 1) {
+##			$consensuses{$target} = $superassembly_consensus{$target};
+##			last;
+##		}
 
 ###     Comments for rerunning joined paralogs
 #		# Read tree into memory
@@ -258,7 +255,7 @@ foreach my $target (keys %targets) {
 #		$return = system("$script_dir/gen-refs.pl '$paralog_name.fasta' -t '$target.con.fasta' -e >/dev/null");
 #		die "Error generating references '$return' for $superassembly.\n" if ($return); 
 		
-		# Parse consensus and add to hash of final consensuses
+		# Parse paralog consensus and add to hash of final consensuses
 		my %paralog_consensus = parse_fasta($consensus);
 		foreach my $consensus (keys %paralog_consensus) {
 			$consensuses{$paralog_name} = $paralog_consensus{$consensus};
@@ -271,6 +268,7 @@ foreach my $target (keys %targets) {
 	unlink("$target.con.fasta");
 
 	# Output contigs which weren't grouped with a paralog
+	# Not currently used so potentially can be removed along with %used_contigs
 	open(my $out, ">", $target."_unused.fasta");
 	my %contigs = parse_fasta($target_alignment);
 	foreach my $contig (keys %contigs) {
@@ -286,15 +284,14 @@ foreach my $target (keys %targets) {
 foreach my $species_name (keys %config) {
 	my $species = $config{$species_name};
 	my $assembly = $species->{ASSEMBLY};
-	#my $reference = $species->{REFERENCE};
-	#($species->{REFERENCE} = $assembly) =~ s/\.fa(sta)?$/.con.fasta/;
 	(my $reference = $assembly) =~ s/\.fa(sta)?$/.con.fasta/;
 	$species->{REFERENCE} = $reference;
 
 	# Write consensuses to file
 	if (!-e $reference) {
+
+		# Complicated sorting of target names is required for gsnap
 		open(my $reference_file, ">", $reference) || die "Could not open '$reference': $!.\n";
-		#foreach my $consensus (sort { $a cmp $b } keys %consensuses) {
 		foreach my $consensus (sort { my $new_a = $a;
 		                              my $new_b = $b;
 									  $new_a =~ s/^(\d+).*/$1/;
@@ -306,6 +303,7 @@ foreach my $species_name (keys %config) {
 									  else {
                                       	$new_a <=> $new_b; 
 									  } 
+
 									  } keys %consensuses) {
 			print {$reference_file} ">$consensus\n";
 			print {$reference_file} "$consensuses{$consensus}\n";
@@ -313,6 +311,8 @@ foreach my $species_name (keys %config) {
 		close($reference_file);
 	}
 }
+
+# TODO: end of new stuff which should be subroutined
 
 # Map raw reads back to consensus sequences with (bwa, gsnap?)
 foreach my $species_name (keys %config) {
@@ -336,6 +336,7 @@ foreach my $species_name (keys %config) {
 	call_species_haplotypes($species, $species_name);
 }
 
+# Haven't figuerd out stuff yet after here
 die;
 
 # Phase haplotypes with HapCompass
