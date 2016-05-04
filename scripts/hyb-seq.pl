@@ -8,6 +8,7 @@ use File::Path "remove_tree";
 use Data::Dumper;
 
 # TODO:
+# add SIGINT handlers to delete in progress files
 # allow additional bwa options?
 # add time stamps to output
 # figure out terminal output
@@ -15,7 +16,14 @@ use Data::Dumper;
 # use nct to multithread haplotype caller
 
 my $targets;
+my %targets;
 my $project_name;
+my %superassembly;
+my $superassembly;
+my $membership_groups;
+my $superassembly_dir;
+my $superassembly_consensus;
+my %superassembly_consensus;
 my $free_cpus = get_free_cpus();
 (my $script_dir = abs_path($0)) =~ s/(.*\/).*/$1/;
 
@@ -23,8 +31,9 @@ my $free_cpus = get_free_cpus();
 my $bwa = check_path_for_exec("bwa");
 my $java = check_path_for_exec("java");
 my $mira = check_path_for_exec("mira");
-my $cap3 = check_path_for_exec("cap3"); # for consensus sequences
+#my $cap3 = check_path_for_exec("cap3"); # for consensus sequences
 my $blat = check_path_for_exec("blat"); # for consensus sequences
+my $raxml = check_path_for_exec("raxmlHPC");
 my $samtools = check_path_for_exec("samtools");
 
 # Required jar files
@@ -52,7 +61,6 @@ foreach my $species_name (keys %config) {
 	chdir("$project_name/$species_name");
 
 	# Only run if user didn't specify an assembly or a reference
-	#if ($assembly eq '' && $reference eq '') {
 	if (!-e "$species_name.fasta" && !-e "$species_name.con.fasta") {
 		$species->{ASSEMBLY} = run_mira($species_name, $species);	
 	}
@@ -61,31 +69,242 @@ foreach my $species_name (keys %config) {
 	}
 }
 
-# Create consensus sequences from each mira assembly
+## Create consensus sequences from each mira assembly
+#foreach my $species_name (keys %config) {
+#	my $species = $config{$species_name};
+#	my $assembly = $species->{ASSEMBLY};
+#	my $reference = $species->{REFERENCE};
+#
+#	chdir("$project_name/$species_name");
+#
+#	# Only run if user didn't specify a reference
+#	#if ($reference eq '') {
+#	if (!-e "$species_name.con.fasta") {
+#		#print "$species_name\n";
+#		print "Generating reference sequences for targets in '$targets' using contigs in '$assembly'...\n";
+#		#my $return = system("$script_dir/gen-refs.pl $assembly -t $targets");
+#		my $return = system("$script_dir/gen-refs.pl.2 $assembly -t $targets");
+#		die "Error generating references '$return' for $assembly.\n" if ($return); 
+#
+#		print "Reference sequence generation complete.\n";
+#
+#		# return output filename to avoid this?
+#		($species->{REFERENCE} = $assembly) =~ s/\.fa(sta)?$/.con.fasta/;
+#		#($species->{REFERENCE} = "$project_name/$species_name/$assembly") =~ s/\.fa(sta)?$/.con.fasta/;
+#	}
+#	else {
+#		($species->{REFERENCE} = $assembly) =~ s/\.fa(sta)?$/.con.fasta/;
+#		#($species->{REFERENCE} = "$project_name/$species_name/$assembly") =~ s/\.fa(sta)?$/.con.fasta/;
+#	}
+#}
+
+# Create mira superassembly
+if (!-e $superassembly) {
+
+	# Get each species' assembly
+	foreach my $species_name (keys %config) {
+		my $species = $config{$species_name};
+		my $assembly = $species->{ASSEMBLY};
+		my $reference = $species->{REFERENCE};
+
+		# Add species' assembly to superassembly
+		system("cat '$assembly' >> '$superassembly'");
+		#($species->{REFERENCE} = $assembly) =~ s/\.fa(sta)?$/.con.fasta/;
+	}
+}
+else {
+	foreach my $species_name (keys %config) {
+		my $species = $config{$species_name};
+		my $assembly = $species->{ASSEMBLY};
+		my $reference = $species->{REFERENCE};
+		#($species->{REFERENCE} = $assembly) =~ s/\.fa(sta)?$/.con.fasta/;
+	}
+}
+
+#TODO: MOVE NEW STUFF TO SUBROUTINE
+
+chdir("$superassembly_dir");
+
+# Check if an alignment from the superassembly exists for all targets
+my $generate_consensus;
+foreach my $target (keys %targets) {
+	$generate_consensus++ if (!-e "$target.fasta");	
+}
+
+# Uncomment when running for the first time
+# Generate references with superassembly
+if ($generate_consensus) {
+##	my $return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$targets'");
+##	my $return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$targets' -c");
+##	die "Error generating references '$return' for '$superassembly'.\n" if ($return); 
+
+
+#	# Run once to determine intron locations
+#	my $return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$targets' -c");
+#	die "Error generating references '$return' for '$superassembly'.\n" if ($return); 
+#
+#	# Run again to improve contig coverage, don't allow introns
+#	$return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$superassembly_consensus' -c -e");
+#	#$return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$superassembly_consensus' -c -e -x");
+#	die "Error generating references '$return' for '$superassembly'.\n" if ($return); 
+}
+#die;
+
+# Parse superassembly into memory
+%superassembly = parse_fasta($superassembly);
+
+# Parse superassembly consensuses into memory
+%superassembly_consensus = parse_fasta($superassembly_consensus);
+
+# TODO: Create new %targets with these consensuses?
+
+# Run RAxML on each target alignment
+my %consensuses;
+foreach my $target (keys %targets) {
+	my $target_alignment = $target.".fasta";
+
+	next if (!-e "$target_alignment"); # For debugging
+	#(my $target_name = $target_alignment) =~ s/\.fasta//;
+	
+	# Write target consensus to separate file
+	open(my $out_fasta, ">", "$target.con.fasta");
+	print {$out_fasta} ">$target\n";	
+	print {$out_fasta} "$superassembly_consensus{$target}\n";	
+	#print {$out_fasta} "$targets{$target}\n";	
+	close($out_fasta);
+
+	 # Skip file containing target consensuses
+	#next if ($target_alignment =~ /\.con\.fasta$/);
+
+	# TODO: break up this step so restarting is less repetitive
+	# Run RAxML rapid bootstrap
+	#if (!-e "RAxML_bipartitions.$target") {
+	if (!-e "RAxML_bestTree.$target") {
+
+		# RAxML doesn't use hyperthreaded cores well
+		my $raxml_cpus = int($free_cpus / 2);
+		$raxml_cpus = 1 if ($raxml_cpus < 1);
+
+		# TODO: add conversion to phylip to avoid issues with RAxML version < 8?
+		# TODO: add raxml settings to global options, add to contig file
+		#my $return = system("$raxml -f a -m GTRGAMMA -s '$target_alignment' -n '$target' -p 123 -x 321 -# 100 -T $raxml_cpus");
+		my $return = system("$raxml -m GTRGAMMA -s '$target_alignment' -n '$target' -p 123 -T $raxml_cpus");
+		die "Error running RAxML on '$target_alignment'.\n" if ($return); 
+
+		# Clean up unneeded RAxML output files
+#		unlink("RAxML_bestTree.$target", "RAxML_bipartitionsBranchLabels.$target", 
+#			   "RAxML_bootstrap.$target", "RAxML_info.$target");
+		unlink("RAxML_info.$target", "RAxML_log.$target", 
+		       "RAxML_parsimonyTree.$target", "RAxML_result.$target", "$target.reduced");
+
+	}
+
+###     Comments for rerunning joined paralogs
+#	# Cluster contigs into two groups based on RAxML tree topology
+#	#my $return = system("$script_dir/separate-contigs.r 'RAxML_bestTree.$target' >/dev/null");
+#	my $return = system("$script_dir/separate-contigs.r.2 'RAxML_bestTree.$target' '$membership_groups' >/dev/null");
+#	die "Error separating contigs in 'RAxML_bestTree.$target'.\n" if ($return); 
+	
+	# Determine contigs present in each paralog, and write their sequences to two separate files
+	my %used_contigs;
+	my @paralogs = glob($target."_paralog*.tre");
+	foreach my $paralog (@paralogs) {
+
+		# Extract paralog name
+		(my $paralog_name = $paralog) =~ s/\.tre$//;
+		my $consensus = $paralog_name.".con.fasta";
+
+		print $paralog_name," = paralog name\n";
+		print $consensus," = consensus\n";
+		print "$target.con.fasta = target\n";
+
+#		####
+#		# For outputting single target of multicopy targets
+#		if (scalar(@paralogs) > 1) {
+#			$consensuses{$target} = $superassembly_consensus{$target};
+#			last;
+#		}
+
+###     Comments for rerunning joined paralogs
+#		# Read tree into memory
+#		open(my $tree, "<", $paralog) || die "Could not open '$paralog': $!.\n";
+#		chomp(my $lines = <$tree>);
+#		close($tree);
+#
+#		# Extract contigs present in tree
+#		my @contigs;
+#		while ($lines =~ /[\(,]([^\(\),]+?)(:[^\(\),]+)?(?=[\),])/g) {
+#			push(@contigs, $1) if ($1 !~ /^\d+$/);
+#		}
+#
+#		# Write sequences of contigs present in paralog to separate file
+#		open(my $out_fasta, ">", "$paralog_name.fasta");
+#		foreach my $contig (@contigs) {
+#			print {$out_fasta} ">$contig\n";	
+#			print {$out_fasta} "$superassembly{$contig}\n";	
+#			$used_contigs{$contig}++;
+#		}
+#		close($out_fasta);
+#
+#		# Run reference generation script
+#		# TODO: run using previous consensus?
+#		#$return = system("$script_dir/gen-refs.pl.2 '$paralog_name.fasta' -t '$targets'");
+#		$return = system("$script_dir/gen-refs.pl.2 '$paralog_name.fasta' -t '$target.con.fasta' -e >/dev/null");
+#		die "Error generating references '$return' for $superassembly.\n" if ($return); 
+		
+		# Parse consensus and add to hash of final consensuses
+		my %paralog_consensus = parse_fasta($consensus);
+		foreach my $consensus (keys %paralog_consensus) {
+			$consensuses{$paralog_name} = $paralog_consensus{$consensus};
+		}
+
+		# TODO: further clean up?
+		#unlink($consensus);
+		unlink("$paralog_name.fasta.psl");
+	}
+	unlink("$target.con.fasta");
+
+	# Output contigs which weren't grouped with a paralog
+	open(my $out, ">", $target."_unused.fasta");
+	my %contigs = parse_fasta($target_alignment);
+	foreach my $contig (keys %contigs) {
+		if (!exists($used_contigs{$contig})) {
+			print {$out} ">$contig\n";
+			print {$out} "$contigs{$contig}\n";
+		}
+	}
+	close($out);
+}
+
+# Write consensus for each paralog to file
 foreach my $species_name (keys %config) {
 	my $species = $config{$species_name};
 	my $assembly = $species->{ASSEMBLY};
-	my $reference = $species->{REFERENCE};
+	#my $reference = $species->{REFERENCE};
+	#($species->{REFERENCE} = $assembly) =~ s/\.fa(sta)?$/.con.fasta/;
+	(my $reference = $assembly) =~ s/\.fa(sta)?$/.con.fasta/;
+	$species->{REFERENCE} = $reference;
 
-	chdir("$project_name/$species_name");
+	# Write consensuses to file
+	if (!-e $reference) {
+		open(my $reference_file, ">", $reference) || die "Could not open '$reference': $!.\n";
+		#foreach my $consensus (sort { $a cmp $b } keys %consensuses) {
+		foreach my $consensus (sort { my $new_a = $a;
+		                              my $new_b = $b;
+									  $new_a =~ s/^(\d+).*/$1/;
+                                      $new_b =~ s/^(\d+).*/$1/;
 
-	# Only run if user didn't specify a reference
-	#if ($reference eq '') {
-	if (!-e "$species_name.con.fasta") {
-		#print "$species_name\n";
-		print "Generating reference sequences for targets in '$targets' using contigs in '$assembly'...\n";
-		my $return = system("$script_dir/gen-refs.pl $assembly -t $targets");
-		die "Error generating references '$return' for $assembly.\n" if ($return); 
-
-		print "Reference sequence generation complete.\n";
-
-		# return output filename to avoid this?
-		($species->{REFERENCE} = $assembly) =~ s/\.fa(sta)?$/.con.fasta/;
-		#($species->{REFERENCE} = "$project_name/$species_name/$assembly") =~ s/\.fa(sta)?$/.con.fasta/;
-	}
-	else {
-		($species->{REFERENCE} = $assembly) =~ s/\.fa(sta)?$/.con.fasta/;
-		#($species->{REFERENCE} = "$project_name/$species_name/$assembly") =~ s/\.fa(sta)?$/.con.fasta/;
+									  if ($new_a == $new_b) {
+                                      	$a cmp $b;
+									  }
+									  else {
+                                      	$new_a <=> $new_b; 
+									  } 
+									  } keys %consensuses) {
+			print {$reference_file} ">$consensus\n";
+			print {$reference_file} "$consensuses{$consensus}\n";
+		}
+		close($reference_file);
 	}
 }
 
@@ -110,6 +329,8 @@ foreach my $species_name (keys %config) {
 	my $species = $config{$species_name};
 	call_species_haplotypes($species, $species_name);
 }
+
+die;
 
 # Phase haplotypes with HapCompass
 foreach my $species_name (keys %config) {
@@ -196,10 +417,11 @@ sub run_mira {
 	print {$mira_conf} "project = $species_name\n";
 	print {$mira_conf} "job = est,denovo,accurate\n";
 	print {$mira_conf} "parameters = -GENERAL:number_of_threads=$free_cpus \\\n";
-	#print {$mira_conf} "             COMMON_SETTINGS -NW:cmrnl=warn -SK:mmhr=1\\\n";
+	print {$mira_conf} "             COMMON_SETTINGS -NW:cmrnl=warn -SK:mmhr=1\\\n";
 	#print {$mira_conf} "             COMMON_SETTINGS -NW:cmrnl=no -SK:mmhr=1\\\n";
-	print {$mira_conf} "             COMMON_SETTINGS -NW:cmrnl=warn \\\n";
-	print {$mira_conf} "             SOLEXA_SETTINGS -CL:pec \\\n\n";
+	#print {$mira_conf} "             COMMON_SETTINGS -NW:cmrnl=warn \\\n";
+	print {$mira_conf} "             SOLEXA_SETTINGS -CL:pec \\\n";
+	print {$mira_conf} "             -CO:fnicpst=yes \\\n\n";
 
 	# PE reads
 	my $read_group_count = 0;
@@ -269,43 +491,81 @@ sub map_accessions_to_references {
 		my %pe_reads = %{$accession->{PE_READS}};
 
 		# If we have multiple paired end libraries, merge them into 2 files
+		my $return;
 		my @f_reads;
 		my @r_reads;
 		foreach my $read_pair (keys %pe_reads) {
 			my @reads = split(/\s+/, $read_pair);
 			push(@f_reads, $reads[0]);
 			push(@r_reads, $reads[1]);
+
+			# Join reads, unzip if needed
+			if ($reads[0] =~ /\.gz$/) {
+				my $return = system("zcat $reads[0] > bwa.R1.fastq");
+				die "Error concatenating reads '$return'" if ($return);
+			}
+			else {
+				$return = system("cat $reads[0] > bwa.R1.fastq");
+				die "Error concatenating reads '$return'" if ($return);
+			}
+
+			# Join reads, unzip if needed
+			if ($reads[1] =~ /\.gz$/) {
+				$return = system("zcat $reads[1] > bwa.R2.fastq");
+				die "Error concatenating reads '$return'" if ($return);
+			}
+			else {
+				$return = system("cat $reads[1] > bwa.R2.fastq");
+				die "Error concatenating reads '$return'" if ($return);
+			}
 		}
 
-		my $return = system("cat @f_reads > bwa.R1.fastq");
-		die "Error concatenating reads '$return'" if ($return);
-		$return = system("cat @r_reads > bwa.R2.fastq");
-		die "Error concatenating reads '$return'" if ($return);
+#		my $return = system("cat @f_reads > bwa.R1.fastq");
+#		die "Error concatenating reads '$return'" if ($return);
+#		$return = system("cat @r_reads > bwa.R2.fastq");
+#		die "Error concatenating reads '$return'" if ($return);
 
-		# Index reference file
-		$return = system("$bwa index $reference");
-		print "$bwa index $reference\n";
-		die "Error indexing reference fasta: '$return'.\n" if ($return);
+		# gmap_build -d meow -D test GroverBaumWendelbaits.fa
+		mkdir("gmap") if (!-e "gmap");
+		$return = system("gmap_build -d '$accession_name' -D gmap '$reference'");
+		die "Error running gmap_build for '$accession_name': '$return'" if ($return);
+		
+		# gsnap -A sam -N 1 --gunzip -d meow -D test -B 5 -t 40 /scratch/nstenz/hyb-seq-analysis/reads/assembly_with_transcript/MiSeq_AD1R4/E_S6_L001_R*.gz > gsnap.sam
+		#   --read-group-id=STRING         Value to put into read-group id (RG-ID) field
+		#     --read-group-name=STRING       Value to put into read-group name (RG-SM) field
+		#       --read-group-library=STRING    Value to put into read-group library (RG-LB) field
+		#         --read-group-platform=STRING   Value to put into read-group library (RG-PL) field
+		$return = system("gsnap -A sam -d '$accession_name' -D gmap -B 5 -t $free_cpus --read-group-id=test --read-group-name=test --read-group-library=lib1 --read-group-platform=illumina bwa.R1.fastq bwa.R2.fastq > '$output.sam'");
+		die "Error running gsnap for '$accession_name': '$return'" if ($return);
 
-		#my $free_cpus = get_free_cpus();
 
-		# Run bwa mem
-		#$return = system("$bwa mem $reference bwa.R1.fastq bwa.R2.fastq $bwa_opts -M -t $threads -R '\@RG\\tID:test\\tSM:test\\tPL:illumina\\tLIB:lib1\\tPU:unit1' > $output.sam");
-		$return = system("$bwa mem $reference bwa.R1.fastq bwa.R2.fastq -M -t $free_cpus -R '\@RG\\tID:test\\tSM:test\\tPL:illumina\\tLIB:lib1\\tPU:unit1' > $output.sam");
-		die "Error running bwa mem: '$return'.\n" if ($return);
+#		# Index reference file
+#		$return = system("$bwa index '$reference'");
+#		print "$bwa index $reference\n";
+#		die "Error indexing reference fasta: '$return'.\n" if ($return);
+#
+#		#my $free_cpus = get_free_cpus();
+#
+#		# Run bwa mem
+#		#$return = system("$bwa mem $reference bwa.R1.fastq bwa.R2.fastq $bwa_opts -M -t $threads -R '\@RG\\tID:test\\tSM:test\\tPL:illumina\\tLIB:lib1\\tPU:unit1' > $output.sam");
+#		$return = system("$bwa mem '$reference' bwa.R1.fastq bwa.R2.fastq -M -t $free_cpus -R '\@RG\\tID:test\\tSM:test\\tPL:illumina\\tLIB:lib1\\tPU:unit1' > '$output.sam'");
+#		die "Error running bwa mem: '$return'.\n" if ($return);
+
 
 		# Convert bwa output to bam
+		# Remove unmapped reads
 		# TODO: include -@ number of threads
-		$return = system("$samtools view $output.sam -b -S > $output.bam");
+		#$return = system("$samtools view $output.sam -b -S > $output.bam");
+		$return = system("$samtools view -@ $free_cpus -F4 '$output.sam' -b -S > '$output.bam'");
 		die "Error converting bwa's sam output to bam: '$return'.\n" if ($return);
 
 		# Sort bam output
 		# TODO: include -@ number of threads, -m memory per thread
-		$return = system("$samtools sort $output.bam $output");
+		$return = system("$samtools sort -@ $free_cpus '$output.bam' '$output'");
 		die "Error sorting bam output: '$return'.\n" if ($return);
 
 		# Index bam output
-		$return = system("$samtools index $output.bam");
+		$return = system("$samtools index '$output.bam'");
 		die "Error error indexing bam output: '$return'.\n" if ($return);
 
 		# Clean up unneeded intermediate files
@@ -319,6 +579,82 @@ sub map_accessions_to_references {
 
 	return;
 }
+
+#sub map_accessions_to_references {
+#	my ($accessions, $species_name, $reference) = @_;
+#	#$reference = "../$reference";
+#
+#	my $init_dir = abs_path(getcwd());
+#
+#	my %accessions = %{$accessions};
+#	foreach my $accession_name (keys %accessions) {
+#		my $output = $accession_name;
+#
+#		chdir("$project_name/$species_name/$accession_name");
+#
+#		# Skip if this has been completed in a previous run
+#		if (-e "$accession_name.bam") {
+#			$accessions->{$accession_name}{BAM_ALIGN} = abs_path("$output.bam");
+#			next;
+#		}
+#
+#		my $accession = $accessions{$accession_name};
+#		my %pe_reads = %{$accession->{PE_READS}};
+#
+#		# If we have multiple paired end libraries, merge them into 2 files
+#		my @f_reads;
+#		my @r_reads;
+#		foreach my $read_pair (keys %pe_reads) {
+#			my @reads = split(/\s+/, $read_pair);
+#			push(@f_reads, $reads[0]);
+#			push(@r_reads, $reads[1]);
+#		}
+#
+#		my $return = system("cat @f_reads > bwa.R1.fastq");
+#		die "Error concatenating reads '$return'" if ($return);
+#		$return = system("cat @r_reads > bwa.R2.fastq");
+#		die "Error concatenating reads '$return'" if ($return);
+#
+#		# Index reference file
+#		$return = system("$bwa index $reference");
+#		print "$bwa index $reference\n";
+#		die "Error indexing reference fasta: '$return'.\n" if ($return);
+#
+#		#my $free_cpus = get_free_cpus();
+#
+#		# Run bwa mem
+#		#$return = system("$bwa mem $reference bwa.R1.fastq bwa.R2.fastq $bwa_opts -M -t $threads -R '\@RG\\tID:test\\tSM:test\\tPL:illumina\\tLIB:lib1\\tPU:unit1' > $output.sam");
+#		$return = system("$bwa mem '$reference' bwa.R1.fastq bwa.R2.fastq -M -t $free_cpus -R '\@RG\\tID:test\\tSM:test\\tPL:illumina\\tLIB:lib1\\tPU:unit1' > '$output.sam'");
+#		die "Error running bwa mem: '$return'.\n" if ($return);
+#
+#
+#		# Convert bwa output to bam
+#		# Remove unmapped reads
+#		# TODO: include -@ number of threads
+#		#$return = system("$samtools view $output.sam -b -S > $output.bam");
+#		$return = system("$samtools view -@ $free_cpus -F4 '$output.sam' -b -S > '$output.bam'");
+#		die "Error converting bwa's sam output to bam: '$return'.\n" if ($return);
+#
+#		# Sort bam output
+#		# TODO: include -@ number of threads, -m memory per thread
+#		$return = system("$samtools sort -@ $free_cpus '$output.bam' '$output'");
+#		die "Error sorting bam output: '$return'.\n" if ($return);
+#
+#		# Index bam output
+#		$return = system("$samtools index '$output.bam'");
+#		die "Error error indexing bam output: '$return'.\n" if ($return);
+#
+#		# Clean up unneeded intermediate files
+#		unlink("$output.sam", "$reference.amb", "$reference.ann", "$reference.pac", "$reference.bwt",
+#			   "$reference.sa", "bwa.R1.fastq", "bwa.R2.fastq");
+#
+#		#$accessions->{$accession_name}{BAM_ALIGN} = "$output.bam";
+#		$accessions->{$accession_name}{BAM_ALIGN} = abs_path("$output.bam");
+#	}
+#	chdir($init_dir);
+#
+#	return;
+#}
 
 sub preprocess_species_bam_files {
 	#my $species = shift;	
@@ -585,8 +921,27 @@ sub parse_config {
 				die "ERROR: could not locate target file '$targets' specified at line $., perhaps you made a typo?\n";
 				#print "ERROR: could not locate target file '$targets' specified at line $., perhaps you made a typo?\n"; # warning for debug
 			}
-
 			$targets = abs_path($targets);
+			%targets = parse_fasta($targets);
+			next;
+		}
+
+		if ($line =~ /^membership\s*=\s*(.*)/i) {
+			$membership_groups = $1;
+
+			# Quick check for proper format
+			my $left_count = 0;
+			while ($membership_groups =~ /\(/g) {
+				$left_count++;
+			}
+
+			my $right_count = 0;
+			while ($membership_groups =~ /\)/g) {
+				$right_count++;
+			}
+
+			die "ERROR: incorrect membership group formatting, mismatching parentheses at line $.?\n" if ($left_count != $right_count);
+
 			next;
 		}
 
@@ -601,6 +956,15 @@ sub parse_config {
 			}
 
 			$project_name = abs_path($project_name);
+
+			$superassembly_dir = "$project_name/_superassembly";
+			$superassembly = "$project_name/_superassembly/superassembly.fasta";
+			$superassembly_consensus = "$project_name/_superassembly/superassembly.con.fasta";
+
+			if (!-e $superassembly_dir) {
+				mkdir($superassembly_dir) || die "ERROR: could not create superassembly directory for project name specified at line $..\n";
+			}
+
 			next;
 		}
 
@@ -874,7 +1238,7 @@ sub get_free_cpus {
 	}
 	else {
 		# Linux
-		chomp(@percent_free_cpu = `top -bn2d0.05 | grep "Cpu(s)"`);
+		chomp(@percent_free_cpu = `top -b -n2 -d0.05 | grep "Cpu(s)"`);
 	}
 
 	my $percent_free_cpu = pop(@percent_free_cpu);
@@ -906,4 +1270,30 @@ sub get_free_cpus {
 	}
 	
 	return $free_cpus;
+}
+
+sub parse_fasta {
+	my $filename = shift;
+
+	my $taxon;
+	my %align;
+	open(my $alignment_file, '<', $filename) 
+		or die "Could not open '$filename': $!\n";
+
+	while (my $line = <$alignment_file>) {
+		$line =~ s/^\s+|\s+$//g;
+
+		# Taxon name
+		if ($line =~ /^>(\S+)/) {
+			$taxon = $1;
+			die "ERROR: Invalid symbol '-', present in taxon name '$taxon', file $filename, line $..\n" if ($taxon =~ /-/);
+		}
+		else {
+			# Taxon sequence
+			$align{$taxon} .= uc($line);
+		}
+	}
+	close($alignment_file);
+	
+	return %align;
 }
