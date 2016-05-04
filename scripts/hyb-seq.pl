@@ -83,7 +83,8 @@ foreach my $species_name (keys %config) {
 #		#print "$species_name\n";
 #		print "Generating reference sequences for targets in '$targets' using contigs in '$assembly'...\n";
 #		#my $return = system("$script_dir/gen-refs.pl $assembly -t $targets");
-#		my $return = system("$script_dir/gen-refs.pl.2 $assembly -t $targets");
+#		#my $return = system("$script_dir/gen-refs.pl.2 $assembly -t $targets");
+#		my $return = system("$script_dir/gen-refs.pl $assembly -t $targets");
 #		die "Error generating references '$return' for $assembly.\n" if ($return); 
 #
 #		print "Reference sequence generation complete.\n";
@@ -136,16 +137,19 @@ foreach my $target (keys %targets) {
 if ($generate_consensus) {
 ##	my $return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$targets'");
 ##	my $return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$targets' -c");
+##	my $return = system("$script_dir/gen-refs.pl '$superassembly' -t '$targets' -c");
 ##	die "Error generating references '$return' for '$superassembly'.\n" if ($return); 
 
 
 #	# Run once to determine intron locations
-#	my $return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$targets' -c");
+##	my $return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$targets' -c");
+#	my $return = system("$script_dir/gen-refs.pl '$superassembly' -t '$targets' -c");
 #	die "Error generating references '$return' for '$superassembly'.\n" if ($return); 
 #
 #	# Run again to improve contig coverage, don't allow introns
-#	$return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$superassembly_consensus' -c -e");
+##	$return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$superassembly_consensus' -c -e");
 #	#$return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$superassembly_consensus' -c -e -x");
+#	$return = system("$script_dir/gen-refs.pl '$superassembly' -t '$superassembly_consensus' -c -e");
 #	die "Error generating references '$return' for '$superassembly'.\n" if ($return); 
 }
 #die;
@@ -202,7 +206,8 @@ foreach my $target (keys %targets) {
 ###     Comments for rerunning joined paralogs
 #	# Cluster contigs into two groups based on RAxML tree topology
 #	#my $return = system("$script_dir/separate-contigs.r 'RAxML_bestTree.$target' >/dev/null");
-#	my $return = system("$script_dir/separate-contigs.r.2 'RAxML_bestTree.$target' '$membership_groups' >/dev/null");
+##	my $return = system("$script_dir/separate-contigs.r.2 'RAxML_bestTree.$target' '$membership_groups' >/dev/null");
+#	my $return = system("$script_dir/separate-contigs.r 'RAxML_bestTree.$target' '$membership_groups' >/dev/null");
 #	die "Error separating contigs in 'RAxML_bestTree.$target'.\n" if ($return); 
 	
 	# Determine contigs present in each paralog, and write their sequences to two separate files
@@ -249,7 +254,8 @@ foreach my $target (keys %targets) {
 #		# Run reference generation script
 #		# TODO: run using previous consensus?
 #		#$return = system("$script_dir/gen-refs.pl.2 '$paralog_name.fasta' -t '$targets'");
-#		$return = system("$script_dir/gen-refs.pl.2 '$paralog_name.fasta' -t '$target.con.fasta' -e >/dev/null");
+##		$return = system("$script_dir/gen-refs.pl.2 '$paralog_name.fasta' -t '$target.con.fasta' -e >/dev/null");
+#		$return = system("$script_dir/gen-refs.pl '$paralog_name.fasta' -t '$target.con.fasta' -e >/dev/null");
 #		die "Error generating references '$return' for $superassembly.\n" if ($return); 
 		
 		# Parse consensus and add to hash of final consensuses
