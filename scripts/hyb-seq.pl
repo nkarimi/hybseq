@@ -144,6 +144,23 @@ sub identify_paralogs_and_create_consensuses {
 	# This will need to be reworked
 	return if ($current_iteration > $max_iterations);
 
+	# Clean up any previous output so we can run this iteration
+	foreach my $species_name (keys %config) {
+		my $species = $config{$species_name};
+
+		# Remove old consensus files
+		print glob("$project_name/$species_name/$species_name.con.*"),"\n";
+		unlink(glob("$project_name/$species_name/$species_name.con.*"));
+
+		# Delete gmap/GATK output for rerun
+		my %accessions = %{$species->{ACCESSIONS}};
+		foreach my $accession_name (keys %accessions) {
+			unlink(glob("$project_name/$species_name/$accession_name/*"));
+			remove_tree("$project_name/$species_name/$accession_name/gmap");
+		}
+	}
+	#die;
+
 	# Check if an alignment from the superassembly exists for all targets
 	my $generate_consensus;
 	foreach my $target (keys %targets) {
@@ -152,10 +169,6 @@ sub identify_paralogs_and_create_consensuses {
 
 	# Generate references for targets using the superassembly
 	if ($generate_consensus) {
-		##	my $return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$targets'");
-		##	my $return = system("$script_dir/gen-refs.pl.2 '$superassembly' -t '$targets' -c");
-		##	my $return = system("$script_dir/gen-refs.pl '$superassembly' -t '$targets' -c");
-		##	die "Error generating references '$return' for '$superassembly'.\n" if ($return); 
 
 		# Run once to determine intron locations
 		my $return = system("$script_dir/gen-refs.pl '$superassembly' -t '$targets' -c");
@@ -234,14 +247,6 @@ sub identify_paralogs_and_create_consensuses {
 			print $consensus," = consensus\n";
 			print "$target.con.fasta = target\n";
 
-	##		####
-	##		# For outputting single target of multicopy targets
-	##		if (scalar(@paralogs) > 1) {
-	##			$consensuses{$target} = $superassembly_consensus{$target};
-	##			last;
-	##		}
-	
-	##     Comments for rerunning joined paralogs
 			# Read tree into memory
 			open(my $tree, "<", $paralog) || die "Could not open '$paralog': $!.\n";
 			chomp(my $lines = <$tree>);
@@ -305,7 +310,7 @@ sub identify_paralogs_and_create_consensuses {
 		# Write consensuses to file
 		if (!-e $reference) {
 	
-			# Complicated sorting of target names is required for gsnap
+			# Complicated sorting of target names is required for gsnap to work
 			open(my $reference_file, ">", $reference) || die "Could not open '$reference': $!.\n";
 			foreach my $consensus (sort { my $new_a = $a;
 			                              my $new_b = $b;
@@ -337,12 +342,26 @@ sub identify_paralogs_and_create_consensuses {
 		map_accessions_to_references(\%accessions, $species_name, $reference);
 	}
 
+	# For faster debugging, uncomment for actual runs
 	# Run GATK best practices on each mapping
 	foreach my $species_name (keys %config) {
 		my $species = $config{$species_name};
 		preprocess_species_bam_files($species, $species_name);
 	}
+	# For faster debugging, remove for actual runs
+#	foreach my $species_name (keys %config) {
+#		my $species = $config{$species_name};
+#
+#		my %accessions = %{$species->{ACCESSIONS}};
+#		foreach my $accession (keys %accessions) {
+#			my $bam = $accessions{$accession}->{BAM_ALIGN};
+#
+#			$accessions{$accession}->{BAM_ALIGN_RECAL} = abs_path($bam);
+#			next;
+#		}
+#	}
 
+	# Determine our current directory
 	my $init_dir = abs_path(getcwd());
 
 	# Create consensus for each paralog using bam2consensus
@@ -361,8 +380,11 @@ sub identify_paralogs_and_create_consensuses {
 			# Go into accession's output directory	
 			chdir("$project_name/$species_name/$accession");
 
+			# For faster debugging, uncomment for actual runs
 			# Get name of bam file
 			my $recal_bam = $accession.".recal.bam";
+			# For faster debugging, remove for actual runs
+			#my $recal_bam = $accession.".bam";
 			die "Recalibrated bam file does not exist for '$accession'.\n" if (!-e $recal_bam);
 				
 			# Create consensus
@@ -389,9 +411,19 @@ sub identify_paralogs_and_create_consensuses {
 			# Add sequences to %final_align, with accession id
 			foreach my $seq (keys %align) {
 				(my $target = $seq) =~ s/_paralog\d+(_cov.*)?$//;
-				$final_align{$target}->{"$seq"."_$accession"} = $align{$seq};
+
+				# Remove -'s from name for file compatibility issues
+				(my $formatted_name = $accession) =~ s/-/_/g;
+				#$final_align{$target}->{"$seq"."_$accession"} = $align{$seq};
+				
+				# Only include the sequence if it isn't entirely N's
+				# TODO: how this is handled really needs to be looked since it removes tips from the tree
+				if ($align{$seq} !~ /^N+$/) {
+					$final_align{$target}->{"$seq"."_$formatted_name"} = $align{$seq};
+				}
 			}
 
+			# Go back to initial working directory
 			chdir($init_dir);
 		}
 	}
@@ -421,11 +453,12 @@ sub identify_paralogs_and_create_consensuses {
 	foreach my $align (@aligns) {
 		my %align = parse_fasta($align);
 
-		# This may need to be adjusted to allow adding in new species/accessions, not sure...
+		# Determine how many paralogs we have
+		my %paralogs = map { local $_ = $_; $_ =~ s/.*(_paralog\d+_).*/$1/; $_ => 1 } keys %align;
+
 		# Single-copy
-		if (scalar(keys %align) < $total_accessions) {
+		if (scalar(keys %paralogs) == 1) {
 			system("mv '$align' single/");
-			#push(@good_targets, $align);
 		}
 		# Multi-copy
 		else {
@@ -450,7 +483,7 @@ sub identify_paralogs_and_create_consensuses {
 				$raxml_cpus = 1 if ($raxml_cpus < 1);
 
 				# Run RAxML
-				my $return = system("raxmlHPC -m GTRGAMMA -s '$align_file' -n '$target' -p 123 -T $raxml_cpus >/dev/null");
+				my $return = system("$raxml -m GTRGAMMA -s '$align_file' -n '$target' -p 123 -T $raxml_cpus >/dev/null");
 				die "Error running RAxML on '$align'.\n" if ($return); 
 
 				# Clean up
@@ -462,12 +495,11 @@ sub identify_paralogs_and_create_consensuses {
 			}
 
 			# Check monophyly with R
-			my $is_mono = system("$script_dir/check-paralog-monophyly.r 'RAxML_bestTree.$target'");
+			my $is_mono = system("$script_dir/check-paralog-monophyly.r 'RAxML_bestTree.$target' >/dev/null");
 
 			# Move alignment into its corresponding directory
 			if ($is_mono) {
 				system("mv '$align' multi-mono/");	
-				#push(@good_targets, $align);
 			}
 			else {
 				system("mv '$align' multi-non-mono/");	
@@ -490,15 +522,16 @@ sub identify_paralogs_and_create_consensuses {
 	foreach my $line (@csv) {
 		my @line = split(/,/, $line);
 
-		# CSV values
+		# Extract CSV values from line
 		my ($target, $total, $monophyletic, $ids) = @line;
 		$ids = '' if (!defined($ids));
 		my @ids = split(" ", $ids);
 
 		# Get the filenames of all paralogs
 		my @all_paralogs = glob("$target"."_paralog*.fasta");
+		@all_paralogs = grep { !/\.con\.fasta/ } @all_paralogs;
 
-		# Remove filenames of supported contigs
+		# Remove supported paralogs from @bad_paralogs
 		my @bad_paralogs = @all_paralogs;
 		foreach my $index (reverse(0 .. $#bad_paralogs)) {
 			my $paralog = $bad_paralogs[$index];
@@ -510,24 +543,21 @@ sub identify_paralogs_and_create_consensuses {
 				}
 			}
 		}
+
+		print "@bad_paralogs\n";
 		
 		# Join contigs used to form bad paralogs into a single file
 		my %bad_contigs;
 		foreach my $paralog (@bad_paralogs) {
-			(my $paralog_id = $paralog) =~ s/.*(_paralog\d+)_?.*/$1/;
+			#(my $paralog_id = $paralog) =~ s/.*(_paralog\d+)_?.*/$1/;
+			(my $paralog_id = $paralog) =~ s/.*(_paralog\d+).*/$1/;
 
 			my %align = parse_fasta($paralog);
 			%bad_contigs = (%align, %bad_contigs);
 
 			# Remove the old output files for this paralog
-			unlink(glob("$target$paralog_id"."_*"));
+			unlink(glob("$target$paralog_id".".*"));
 		}
-
-#		# Write target consensus to separate file
-#		open(my $out_fasta, ">", "$target.con.fasta");
-#		print {$out_fasta} ">$target\n";	
-#		print {$out_fasta} "$superassembly_consensus{$target}\n";	
-#		close($out_fasta);
 
 		# Join the bad paralogs if we have any
 		if (@bad_paralogs) {
@@ -537,7 +567,8 @@ sub identify_paralogs_and_create_consensuses {
 			my $new_id;
 			foreach my $paralog (sort { $a cmp $b } @all_paralogs) {
 				if (!-e $paralog) {
-					($new_id = $paralog) =~ s/.*(_paralog\d+)_?.*/$1/;
+					#($new_id = $paralog) =~ s/.*(_paralog\d+)_?.*/$1/;
+					($new_id = $paralog) =~ s/.*(_paralog\d+).*/$1/;
 
 					# Output sequences as FASTA format
 					open(my $out, ">", "$target$new_id.fasta");
@@ -554,29 +585,11 @@ sub identify_paralogs_and_create_consensuses {
 					last;
 				}
 			}
+			###die if (!$new_id);
 
 			# Create a new consensus for these sequences
 			my $return = system("$script_dir/gen-refs.pl '$target$new_id.fasta' -t '$target.con.fasta' -e >/dev/null");
 		}
-
-#		# Recreate good paralog consensuses
-#		foreach my $paralog (@all_paralogs) {
-#			#my ($id = $paralog) =~ s/.*(_paralog\d+)_?.*/$1/;
-#
-#			# Check if we have a good paralog
-#			my $is_good_paralog = 1;
-#			foreach my $bad_paralog (@bad_paralogs) {
-#				if ($paralog eq $bad_paralog) {
-#					$is_good_paralog = 0;
-#				}
-#			}
-#
-#			# Create a new consensus for this paralog
-#			if ($is_good_paralog) {
-#				my $return = system("$script_dir/gen-refs.pl '$paralog' -t '$target.con.fasta' -e >/dev/null");
-#				die if ($return);
-#			}
-#		}
 	}
 	
 	# Rerun if needed
@@ -610,7 +623,7 @@ foreach my $species_name (keys %config) {
 	call_species_haplotypes($species, $species_name);
 }
 
-# Haven't figuerd out stuff yet after here
+# Haven't figured out stuff yet after here
 die;
 
 # Phase haplotypes with HapCompass
@@ -861,6 +874,7 @@ sub map_accessions_to_references {
 	return;
 }
 
+# bwa version
 #sub map_accessions_to_references {
 #	my ($accessions, $species_name, $reference) = @_;
 #	#$reference = "../$reference";
@@ -945,8 +959,20 @@ sub preprocess_species_bam_files {
 	my $reference = $species->{REFERENCE};
 	my @known_variants = @{$species->{KNOWN_VARIANTS}};
 	(my $dict = $reference) =~ s/\.fa(sta)?$/.dict/i;
+	#(my $dict = $reference) =~ s/\.fa(sta)?$/.dict.fasta/i;
 
 	my $init_dir = abs_path(getcwd());
+
+	# Move into species' directory
+	chdir("$project_name/$species_name/");
+
+	# Create dictionary with Picard tools for this species
+	my $return = system("$java -jar $create_seq_dict R=$reference O=$dict");
+	die "Error creating dictionary for '$reference'.\n" if ($return);
+
+	# Index the reference sequences for this species
+	$return = system("$samtools faidx $reference");
+	die "Error indexing reference '$reference'.\n" if ($return);
 
 	my %accessions = %{$species->{ACCESSIONS}};
 	foreach my $accession (keys %accessions) {
@@ -962,20 +988,19 @@ sub preprocess_species_bam_files {
 
 		#TODO: clean up intermediate output
 
-		my $return;
+#		my $return;
 
 		# Create dictionary for references sequences
-		if (!-e $dict) {
+##		if (!-e $dict) {
 
-			# Create dictionary with Picard tools
-			#$return = system("java -jar ~/private/phyloPrograms/picard-tools-1.119/CreateSequenceDictionary.jar R=$reference O=$dict");
-			$return = system("$java -jar $create_seq_dict R=$reference O=$dict");
-			die "Error creating dictionary for '$reference'.\n" if ($return);
-
-			# Index the reference
-			$return = system("$samtools faidx $reference");
-			die "Error indexing reference '$reference'.\n" if ($return);
-		}
+#			# Create dictionary with Picard tools
+#			$return = system("$java -jar $create_seq_dict R=$reference O=$dict");
+#			die "Error creating dictionary for '$reference'.\n" if ($return);
+#
+#			# Index the reference
+#			$return = system("$samtools faidx $reference");
+#			die "Error indexing reference '$reference'.\n" if ($return);
+##		}
 
 		# MarkDuplicates
 		#system("java -jar ~/private/phyloPrograms/picard-tools-1.119/MarkDuplicates.jar REMOVE_DUPLICATES=true METRICS_FILE=$accession.dedup.txt INPUT=$bam OUTPUT=$accession.dedup.bam");
