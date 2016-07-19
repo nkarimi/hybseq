@@ -19,7 +19,7 @@ my $targets;
 my %targets;
 my $project_name;
 my %superassembly;
-my $superassembly;
+my $superassembly; # fasta file name (with its path)
 my $membership_groups;
 my $superassembly_dir;
 my $superassembly_consensus;
@@ -67,6 +67,7 @@ foreach my $species_name (keys %config) {
 	else {
 		$species->{ASSEMBLY} = "$project_name/$species_name/$species_name.fasta";	
 	}
+	print("ran mira or set fasta file name for $species_name\n");
 }
 
 # Old script run behavior
@@ -102,7 +103,7 @@ foreach my $species_name (keys %config) {
 
 # Create mira superassembly
 if (!-e $superassembly) {
-
+    print("next: concatenate mira assemblies to create superassembly\n");
 	# Concat the mira assembly from each species
 	foreach my $species_name (keys %config) {
 		my $species = $config{$species_name};
@@ -115,6 +116,7 @@ if (!-e $superassembly) {
 	}
 }
 else {
+    print("next: set names from existing assemblies \n");
 	foreach my $species_name (keys %config) {
 		my $species = $config{$species_name};
 		my $assembly = $species->{ASSEMBLY};
@@ -133,6 +135,7 @@ sub identify_paralogs_and_create_consensuses {
 	my $max_iterations = shift;
 
 	# Move into superassembly directory
+	print("next: move to superassembly directory $superassembly_dir");
 	chdir("$superassembly_dir");
 
 	# Determine which iteration we are on
