@@ -103,6 +103,9 @@ my %ignore;
 my $count = 0;
 my %troublesome;
 my %final_alignments;
+print("list of targets after blat:\n");
+for (keys %targets){ print("$_\n"); }
+
 foreach my $target (keys %targets) {
 	# list of defeated troublesome contigs
 	#$target = '161|Gorai.012G146100.2|';

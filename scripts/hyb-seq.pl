@@ -15,7 +15,7 @@ use Data::Dumper;
 # remove loops around most method calls, make %config only argument
 # use nct to multithread haplotype caller
 
-my $targets;
+my $targets; # name of targets file containing hyb-seq baits
 my %targets;
 my $project_name;
 my %superassembly;
@@ -32,7 +32,7 @@ my $bwa = check_path_for_exec("bwa");
 my $java = check_path_for_exec("java");
 my $mira = check_path_for_exec("mira");
 my $blat = check_path_for_exec("blat"); # for consensus sequences
-my $raxml = check_path_for_exec("raxmlHPC");
+my $raxml = check_path_for_exec("raxmlHPC-PTHREADS-SSE3");
 my $samtools = check_path_for_exec("samtools");
 my $bam2consensus = check_path_for_exec("bam2consensus");
 
@@ -61,7 +61,10 @@ foreach my $species_name (keys %config) {
 	chdir("$project_name/$species_name");
 
 	# Only run if user didn't specify an assembly or a reference
-	if (!-e "$species_name.fasta" && !-e "$species_name.con.fasta") {
+	if (!-e "$species_name.fasta") { # (!-e "$species_name.fasta" && !-e "species_name.con.fasta")
+                # previously: Noah had this additional constraint inside the "if" above,
+                # but Cecile unsure why would mira create it:
+                # && !-e "species_name.con.fasta"
 		$species->{ASSEMBLY} = run_mira($species_name, $species);	
 	}
 	else {
@@ -135,7 +138,7 @@ sub identify_paralogs_and_create_consensuses {
 	my $max_iterations = shift;
 
 	# Move into superassembly directory
-	print("next: move to superassembly directory $superassembly_dir");
+	print("next: move to superassembly directory $superassembly_dir\n");
 	chdir("$superassembly_dir");
 
 	# Determine which iteration we are on
@@ -143,6 +146,7 @@ sub identify_paralogs_and_create_consensuses {
 	while (-e "run$current_iteration") {
 		$current_iteration++;
 	}
+        print("iteration $current_iteration in $superassembly_dir/run$current_iteration\n");
 
 	# This will need to be reworked
 	return if ($current_iteration > $max_iterations);
@@ -164,33 +168,47 @@ sub identify_paralogs_and_create_consensuses {
 	}
 	#die;
 
+        # print("targets keys:\n"); for (keys %targets){ print("$_\n");}
+
 	# Check if an alignment from the superassembly exists for all targets
-	my $generate_consensus;
+	my $generate_consensus=0;
+        print("next: looking for ". (keys %targets) ." target files\n");
 	foreach my $target (keys %targets) {
 		$generate_consensus++ if (!-e "$target.fasta");	
 	}
+        if ($generate_consensus) {
+	    print("generate_consensus=" . $generate_consensus . "\n");}
+        else {
+	    print("generate_consensus returned false\n");}
 
 	# Generate references for targets using the superassembly
 	if ($generate_consensus) {
 
 		# Run once to determine intron locations
+                print("next: will run gen-ref.pl on superassembly and targets\n");
 		my $return = system("$script_dir/gen-refs.pl '$superassembly' -t '$targets' -c");
 		die "Error generating references '$return' for '$superassembly'.\n" if ($return); 
 
 		# Run again using previous consensus as targets improve contig coverage, don't allow introns this time
+                print("next: will run gen-refs.pl on superassembly and superassembly_consensus\n");
 		$return = system("$script_dir/gen-refs.pl '$superassembly' -t '$superassembly_consensus' -c -e");
 		die "Error generating references '$return' for '$superassembly'.\n" if ($return); 
 	}
 
 	# Parse superassembly into memory
+        print("next: parse_fasta to parse superassembly into memory\n");
 	%superassembly = parse_fasta($superassembly);
 	
 	# Parse superassembly consensuses into memory
+        print("next: parse_fasta on superassembly consensus, to get it into memory\n");
 	%superassembly_consensus = parse_fasta($superassembly_consensus);
+        print("superassembly_consensus keys:\n");
+        for (keys %superassembly_consensus){ print("$_\n");}
 	
 	# TODO: Create new %targets with these consensuses?
 
 	# Run RAxML on each target alignment
+        print("next: run RAxML on each target alignment\n");
 	my %consensuses;
 	foreach my $target (keys %targets) {
 		my $target_alignment = $target.".fasta";
@@ -1583,6 +1601,7 @@ sub get_free_cpus {
 
 sub parse_fasta {
 	my $filename = shift;
+        #print("running parse_fasta on file $filename\n");
 
 	my $taxon;
 	my %align;
